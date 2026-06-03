@@ -1,0 +1,34 @@
+# Translation file
+
+ModuleInventairePlusName=InventairePlus
+ModuleInventairePlusDesc=Fonctionnalités transverses pour les inventaires Dolibarr
+InventairePlusSetup=Configuration InventairePlus
+InventairePlusArea=InventairePlus
+
+PrintInventoryCountSheet=Imprimer fiche de décompte
+GenerateInventoryDiscrepancyReport=Point des écarts
+EditInventoryJustifications=Saisir les justifications
+GenerateInventoryMinutes=Générer PV d'inventaire
+InventoryDiscrepanciesTitle=Saisie des justifications d'écarts
+InventoryTheoreticalQty=Qté théorique
+InventoryPhysicalQty=Qté physique
+InventoryDeltaQty=Ecart
+InventoryJustification=Justification
+SaveJustifications=Enregistrer les justifications
+ConfirmSaveInventoryJustifications=Confirmer l'enregistrement des justifications saisies ?
+InventoryJustificationsSaved=Justifications enregistrées
+ErrorFailedToSaveInventoryJustifications=Echec de l'enregistrement des justifications
+NoInventoryDiscrepancy=Aucun écart n'a été détecté pour cet inventaire
+ExpiryDateInventairePlus=Péremption
+InventoryPlusPdfModelMissing=Le modèle PDF InventairePlus est introuvable
+InventoryPlusStockDocumentDirectoryMissing=Le répertoire documentaire du module stock est introuvable
+InventoryPlusGeneratedPdfPathMissing=Le chemin du PDF généré est introuvable
+InventoryPlusInventoryExtraFieldsUpdateWarning=Le document a été généré mais les extrafields inventaire n'ont pas pu être mis à jour
+InventoryPlusInvalidInventory=Inventaire invalide
+InventoryPlusCountSheetOnlyForValidatedInventory=La fiche de décompte n'est disponible que pour un inventaire validé
+InventoryPlusDiscrepancyReportOnlyForValidatedOrRecordedInventory=Le point des écarts n'est disponible que pour un inventaire validé ou enregistré
+InventoryPlusMinutesOnlyForRecordedInventory=Le PV d'inventaire n'est disponible que pour un inventaire enregistré
+InventoryPlusCountSheetGenerationFailed=La génération de la fiche de décompte a échoué
+InventoryPlusDiscrepancyReportGenerationFailed=La génération du point des écarts a échoué
+InventoryPlusMinutesGenerationFailed=La génération du PV d'inventaire a échoué
+InventoryPlusNoLineForMinutes=Aucune ligne n'est disponible pour le PV d'inventaire
