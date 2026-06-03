@@ -66,12 +66,12 @@ class modInventairePlus extends DolibarrModules
 
 		// DESCRIPTION_FLAG
 		// Module description, used if translation string 'ModuleInventairePlusDesc' not found (InventairePlus is name of module).
-		$this->description = "InventairePlusDescription";
+		$this->description = "Fonctionnalités transverses pour les inventaires Dolibarr";
 		// Used only if file README.md and README-LL.md not found.
-		$this->descriptionlong = "InventairePlusDescription";
+		$this->descriptionlong = "Fonctionnalités transverses pour les inventaires Dolibarr";
 
 		// Author
-		$this->editor_name = 'Entité maître';
+		$this->editor_name = 'Fred Omega Junior';		// Author name
 		$this->editor_url = 'www.linkedin.com/in/frédéric-h-887621160';		// Must be an external online web site
 		$this->editor_squarred_logo = '';					// Must be image filename into the module/img directory followed with @modulename. Example: 'myimage.png@inventaireplus'
 
