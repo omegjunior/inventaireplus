@@ -107,18 +107,18 @@ class pdf_transfertstock extends ModelePDFFactures
 		$this->emetteur = $mysoc;
 		$this->cols = array(
 			array('key' => 'num', 'label' => 'N°', 'width' => 9, 'align' => 'C'),
-			array('key' => 'ref', 'label' => 'REF PRODUIT', 'width' => 20, 'align' => 'L'),
-			array('key' => 'designation', 'label' => 'DESIGNATION', 'width' => 65, 'align' => 'L'),
-			array('key' => 'qty', 'label' => 'QUANTITE', 'width' => 18, 'align' => 'R'),
+			array('key' => 'ref', 'label' => 'REF PRODUIT', 'width' => 25, 'align' => 'L'),
+			array('key' => 'designation', 'label' => 'DESIGNATION', 'width' => 51, 'align' => 'L'),
+			array('key' => 'qty', 'label' => 'QUANTITE', 'width' => 15, 'align' => 'R'),
 		);
 		if (isModEnabled('productbatch')) {
 			$this->cols[] = array('key' => 'lot', 'label' => 'LOT', 'width' => 23, 'align' => 'L');
 			$this->cols[] = array('key' => 'expiry', 'label' => 'DATE DE PEREMPTION', 'width' => 24, 'align' => 'C');
 		} else {
-			$this->cols[2]['width'] = 88;
+			$this->cols[2]['width'] = 98;
 		}
-		$this->cols[] = array('key' => 'unitprice', 'label' => 'PRIX UNITAIRE (TTC)', 'width' => 22, 'align' => 'R');
-		$this->cols[] = array('key' => 'amount', 'label' => 'MONTANT (TTC)', 'width' => 23, 'align' => 'R');
+		$this->cols[] = array('key' => 'unitprice', 'label' => 'PRIX UNITAIRE (TTC)', 'width' => 21, 'align' => 'R');
+		$this->cols[] = array('key' => 'amount', 'label' => 'MONTANT (TTC)', 'width' => 22, 'align' => 'R');
 	}
 
 	/**
@@ -624,9 +624,9 @@ class pdf_transfertstock extends ModelePDFFactures
 		$rightX = $this->page_largeur - $this->marge_droite - 60;
 		$signatureY = $y + 8;
 		$pdf->SetXY($leftX, $signatureY);
-		$pdf->Cell(55, 6, 'RESPONSABLE MAGASIN', 0, 0, 'C');
+		$pdf->Cell(55, 6, 'CHEF MAGASIN / RAYON', 0, 0, 'C');
 		$pdf->SetXY($rightX, $signatureY);
-		$pdf->Cell(55, 6, 'RESPONSABLE SERVICE', 0, 1, 'C');
+		$pdf->Cell(55, 6, 'OPERATEUR DU MOUVEMENT', 0, 1, 'C');
 	}
 
 	/**
@@ -656,6 +656,5 @@ class pdf_transfertstock extends ModelePDFFactures
 		return parent::liste_modeles($db, $maxfilenamelength);
 	}
 }
-
 
 

@@ -431,6 +431,29 @@ class pdf_stockcashiersheet extends ModelePDFFactures
 					$pdf->SetFont('', '', $default_font_size - 1); // Into loop to work with multipage
 					$pdf->SetTextColor(0, 0, 0);
 
+					$rowHeight = 8;
+					if (($curY + $rowHeight) > ($this->page_hauteur - $this->heightforfooter)) {
+						$pageToClose = $pdf->getPage();
+						$tableTopForPage = ($pageToClose == $pageposbeforeprintlines ? $this->tab_top : $this->tab_top_newpage);
+						$lgTableonPage[$pageToClose] = max($this->tabTitleHeight, $curY - $tableTopForPage);
+
+						$pdf->setPage($pageToClose);
+						$pdf->setPageOrientation('', 1, 0);
+						if ($pageToClose == $pageposbeforeprintlines) {
+							$this->_tableau($pdf, $this->tab_top, $lgTableonPage[$pageToClose], 0, $outputlangs, $hidetop, 1, $object->multicurrency_code, $outputlangsbis);
+						} else {
+							$this->_tableau($pdf, $this->tab_top_newpage, $lgTableonPage[$pageToClose], 0, $outputlangs, 0, 1, $object->multicurrency_code, $outputlangsbis);
+						}
+						$this->_pagefoot($pdf, $object, $outputlangs, 1);
+
+						$pdf->setPageOrientation('', 1, $this->heightforfooter);
+						$pdf->AddPage();
+						$pagenb = $pdf->getPage();
+						$curY = $this->tab_top_newpage + $this->tabTitleHeight;
+						$currentY = $curY;
+						$hcell = $this->tabTitleHeight;
+					}
+
 					$hcell += 8;
 
 					$pageposbefore = $pdf->getPage();
@@ -485,7 +508,7 @@ class pdf_stockcashiersheet extends ModelePDFFactures
 						if ($pagenb == $pageposbeforeprintlines) {
 							$this->_tableau($pdf, $this->tab_top, $lgTableonPage[$pagenb], 0, $outputlangs, $hidetop, 1, $object->multicurrency_code, $outputlangsbis);
 						} else {
-							$this->_tableau($pdf, $this->tab_top_newpage, $lgTableonPage[$pagenb], 0, $outputlangs, 1, 1, $object->multicurrency_code, $outputlangsbis);
+							$this->_tableau($pdf, $this->tab_top_newpage, $lgTableonPage[$pagenb], 0, $outputlangs, 0, 1, $object->multicurrency_code, $outputlangsbis);
 						}
 						$this->_pagefoot($pdf, $object, $outputlangs, 1);
 						//remettre à défault
@@ -515,7 +538,7 @@ class pdf_stockcashiersheet extends ModelePDFFactures
 					$bottomlasttab = $currentY + 12;
 				} else {
 					$pdf->setPageOrientation('', 1, 0);
-					$this->_tableau($pdf, $this->tab_top_newpage, $lgTableonPage[$pagenb], 0, $outputlangs, 1, 1, $conf->currency, $outputlangsbis);
+					$this->_tableau($pdf, $this->tab_top_newpage, $lgTableonPage[$pagenb], 0, $outputlangs, 0, 1, $conf->currency, $outputlangsbis);
 					$this->_pagefoot($pdf, $object, $outputlangs, 1);
 					$bottomlasttab = $currentY + 12;
 				}

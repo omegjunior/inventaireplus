@@ -70,18 +70,18 @@ class pdf_valorisationstock extends ModelePDFFactures
 		$this->emetteur = $mysoc;
 		$this->cols = array(
 			array('key' => 'num', 'label' => 'N°', 'width' => 8, 'align' => 'C'),
-			array('key' => 'ref', 'label' => 'REF PRODUIT', 'width' => 17, 'align' => 'L'),
-			array('key' => 'designation', 'label' => 'DESIGNATION', 'width' => 50, 'align' => 'L'),
+			array('key' => 'ref', 'label' => 'REF PRODUIT', 'width' => 25, 'align' => 'L'),
+			array('key' => 'designation', 'label' => 'DESIGNATION', 'width' => 38, 'align' => 'L'),
 		);
 		if (isModEnabled('productbatch')) {
 			$this->cols[] = array('key' => 'lot', 'label' => 'LOT', 'width' => 21, 'align' => 'L');
 			$this->cols[] = array('key' => 'expiry', 'label' => 'DATE DE PEREMPTION', 'width' => 24, 'align' => 'C');
 		} else {
-			$this->cols[2]['width'] = 78;
+			$this->cols[2]['width'] = 83;
 		}
-		$this->cols[] = array('key' => 'qty', 'label' => 'QUANTITE', 'width' => 17, 'align' => 'R');
-		$this->cols[] = array('key' => 'purchase', 'label' => 'VALORISATION A L\'ACHAT', 'width' => 31, 'align' => 'R');
-		$this->cols[] = array('key' => 'sell', 'label' => 'VALORISATION A LA VENTE', 'width' => 34, 'align' => 'R');
+		$this->cols[] = array('key' => 'qty', 'label' => 'QUANTITE', 'width' => 15, 'align' => 'R');
+		$this->cols[] = array('key' => 'purchase', 'label' => 'VALORISATION A L\'ACHAT', 'width' => 28, 'align' => 'R');
+		$this->cols[] = array('key' => 'sell', 'label' => 'VALORISATION A LA VENTE', 'width' => 31, 'align' => 'R');
 	}
 
 	/**
@@ -365,7 +365,7 @@ class pdf_valorisationstock extends ModelePDFFactures
 		$pdf->SetFillColor(240, 240, 240);
 		$pdf->SetXY($this->marge_gauche, $y);
 		$label = str_repeat('   ', (int) $categoryLevel).strtoupper($categoryLabel);
-		$pdf->MultiCell($this->page_largeur - $this->marge_gauche - $this->marge_droite, 7, $label, 1, ((int) $categoryLevel > 0 ? 'L' : 'C'), 1, 1, '', '', true, 0, false, true, 7, 'M', true);
+		$pdf->MultiCell($this->getTableWidth(), 7, $label, 1, ((int) $categoryLevel > 0 ? 'L' : 'C'), 1, 1, '', '', true, 0, false, true, 7, 'M', true);
 		return ($y + 7);
 	}
 
@@ -441,6 +441,19 @@ class pdf_valorisationstock extends ModelePDFFactures
 		$pdf->Ln();
 
 		return ($y + 6);
+	}
+
+	/**
+	 * @return float
+	 */
+	protected function getTableWidth()
+	{
+		$width = 0;
+		foreach ($this->cols as $col) {
+			$width += $col['width'];
+		}
+
+		return $width;
 	}
 }
 

@@ -349,7 +349,7 @@ class modInventairePlus extends DolibarrModules
 			'mainmenu' => 'products',
 			'leftmenu' => 'inventaireplus_stock_list',
 			'url' => '/inventaireplus/product/stock/list.php',
-			'langs' => 'stocks,inventaireplus@inventaireplus',
+			'langs' => 'inventaireplus@inventaireplus',
 			'position' => 1000 + $r,
 			'enabled' => 'isModEnabled("inventaireplus")',
 			'perms' => '$user->rights->stock->lire',
@@ -373,7 +373,7 @@ class modInventairePlus extends DolibarrModules
 		$this->menu[$r++] = array(
 			'fk_menu' => 'fk_mainmenu=products,fk_leftmenu=stock',
 			'type' => 'left',
-			'titre' => 'StockAtDate',
+			'titre' => 'StockAtDateVal',
 			'mainmenu' => 'products',
 			'leftmenu' => 'inventaireplus_stockatdate',
 			'url' => '/inventaireplus/product/stock/stockatdate.php',
@@ -655,7 +655,6 @@ class modInventairePlus extends DolibarrModules
 		return $this->_remove($sql, $options);
 	}
 }
-
 
 
 
