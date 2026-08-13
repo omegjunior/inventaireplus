@@ -130,6 +130,77 @@ class InterfaceInventairePlusTriggers extends DolibarrTriggers
 		return 0;
 	}
 
+	protected function findOriginalStockMovementForReverse($object)
+	{
+		$inventoryCode = (!empty($object->inventorycode) ? trim((string) $object->inventorycode) : '');
+		if ($inventoryCode === '' || strpos($inventoryCode, 'REVERT-') !== 0) return null;
+		$originalInventoryCode = substr($inventoryCode, 7);
+		$currentRowId = (int) $object->id;
+		$productId = isset($object->product_id) ? (int) $object->product_id : 0;
+		$warehouseId = isset($object->warehouse_id) ? (int) $object->warehouse_id : 0;
+		$movementType = isset($object->type) ? (int) $object->type : -1;
+		$batch = isset($object->batch) ? (string) $object->batch : '';
+		$qty = isset($object->qty) ? (float) price2num($object->qty, 'MS') : 0.0;
+		if ($currentRowId <= 0 || $productId <= 0 || $warehouseId <= 0 || $originalInventoryCode === '' || !in_array($movementType, array(0, 1), true)) return null;
+		$expectedOriginalType = ($movementType === 0 ? 1 : 0);
+		$sql = "SELECT sm.rowid FROM ".MAIN_DB_PREFIX."stock_mouvement AS sm WHERE sm.inventorycode = '".$this->db->escape($originalInventoryCode)."' AND sm.rowid < ".$currentRowId." AND sm.fk_product = ".$productId." AND sm.fk_entrepot = ".$warehouseId." AND sm.type_mouvement = ".$expectedOriginalType." AND ABS(sm.value) = ".price2num(abs($qty), 'MS');
+		$sql .= ($batch !== '') ? " AND sm.batch = '".$this->db->escape($batch)."'" : " AND (sm.batch IS NULL OR sm.batch = '')";
+		$sql .= " ORDER BY sm.rowid DESC LIMIT 1";
+		$resql = $this->db->query($sql);
+		if (!$resql) return null;
+		$obj = $this->db->fetch_object($resql);
+		$this->db->free($resql);
+		return $obj ? array('rowid' => (int) $obj->rowid) : null;
+	}
+
+	protected function fetchStockMovementTransferExtraFields($movementId)
+	{
+		$movementId = (int) $movementId;
+		if ($movementId <= 0) return null;
+		$sql = "SELECT transfer_source, transfer_target, transfer_category_id, transfer_category_label, transfer_category_rank, transfer_origin_type, transfer_origin_id FROM ".MAIN_DB_PREFIX."stock_mouvement_extrafields WHERE fk_object = ".$movementId." LIMIT 1";
+		$resql = $this->db->query($sql);
+		if (!$resql) return null;
+		$obj = $this->db->fetch_object($resql);
+		$this->db->free($resql);
+		if (!$obj) return null;
+		return array('transfer_source' => (int) $obj->transfer_source, 'transfer_target' => (int) $obj->transfer_target, 'transfer_category_id' => (int) $obj->transfer_category_id, 'transfer_category_label' => (string) $obj->transfer_category_label, 'transfer_category_rank' => (int) $obj->transfer_category_rank, 'transfer_origin_type' => (string) $obj->transfer_origin_type, 'transfer_origin_id' => (int) $obj->transfer_origin_id);
+	}
+
+	protected function upsertStockMovementTransferExtraFields($movementId, array $values)
+	{
+		$movementId = (int) $movementId;
+		if ($movementId <= 0) return false;
+		$resql = $this->db->query("SELECT fk_object FROM ".MAIN_DB_PREFIX."stock_mouvement_extrafields WHERE fk_object = ".$movementId." LIMIT 1");
+		if (!$resql) return false;
+		$exists = ($this->db->fetch_object($resql) ? true : false);
+		$this->db->free($resql);
+		$set = " transfer_source = ".((int) ($values['transfer_source'] ?? 0));
+		$set .= ", transfer_target = ".((int) ($values['transfer_target'] ?? 0));
+		$set .= ", transfer_category_id = ".((int) ($values['transfer_category_id'] ?? 0));
+		$set .= ", transfer_category_label = '".$this->db->escape((string) ($values['transfer_category_label'] ?? ''))."'";
+		$set .= ", transfer_category_rank = ".((int) ($values['transfer_category_rank'] ?? 0));
+		$set .= ", transfer_origin_type = '".$this->db->escape((string) ($values['transfer_origin_type'] ?? ''))."'";
+		$set .= ", transfer_origin_id = ".((int) ($values['transfer_origin_id'] ?? 0));
+		$set .= ", transfer_pdf_file = '', transfer_pdf_generated_at = NULL";
+		if ($exists) $sql = "UPDATE ".MAIN_DB_PREFIX."stock_mouvement_extrafields SET ".$set." WHERE fk_object = ".$movementId;
+		else $sql = "INSERT INTO ".MAIN_DB_PREFIX."stock_mouvement_extrafields (fk_object, transfer_source, transfer_target, transfer_category_id, transfer_category_label, transfer_category_rank, transfer_origin_type, transfer_origin_id, transfer_pdf_file, transfer_pdf_generated_at) VALUES (".$movementId.", ".((int) ($values['transfer_source'] ?? 0)).", ".((int) ($values['transfer_target'] ?? 0)).", ".((int) ($values['transfer_category_id'] ?? 0)).", '".$this->db->escape((string) ($values['transfer_category_label'] ?? ''))."', ".((int) ($values['transfer_category_rank'] ?? 0)).", '".$this->db->escape((string) ($values['transfer_origin_type'] ?? ''))."', ".((int) ($values['transfer_origin_id'] ?? 0)).", '', NULL)";
+		return (bool) $this->db->query($sql);
+	}
+
+	public function stockMovement($action, $object, User $user, Translate $langs, Conf $conf)
+	{
+		$inventoryCode = (!empty($object->inventorycode) ? trim((string) $object->inventorycode) : '');
+		$movementType = isset($object->type) ? (int) $object->type : -1;
+		if ($inventoryCode === '' || strpos($inventoryCode, 'REVERT-') !== 0 || !in_array($movementType, array(0, 1), true)) return 0;
+		$originalMovement = $this->findOriginalStockMovementForReverse($object);
+		if (empty($originalMovement)) return 0;
+		$originalExtraFields = $this->fetchStockMovementTransferExtraFields((int) $originalMovement['rowid']);
+		if (empty($originalExtraFields)) return 0;
+		$reverseExtraFields = array('transfer_source' => (int) $originalExtraFields['transfer_target'], 'transfer_target' => (int) $originalExtraFields['transfer_source'], 'transfer_category_id' => (int) $originalExtraFields['transfer_category_id'], 'transfer_category_label' => (string) $originalExtraFields['transfer_category_label'], 'transfer_category_rank' => (int) $originalExtraFields['transfer_category_rank'], 'transfer_origin_type' => (string) $originalExtraFields['transfer_origin_type'], 'transfer_origin_id' => (int) $originalExtraFields['transfer_origin_id']);
+		if ((int) $reverseExtraFields['transfer_source'] <= 0 || (int) $reverseExtraFields['transfer_target'] <= 0) return 0;
+		$this->upsertStockMovementTransferExtraFields((int) $object->id, $reverseExtraFields);
+		return 0;
+	}
 	public function runTrigger($action, $object, User $user, Translate $langs, Conf $conf)
 	{
 		if (!isModEnabled('inventaireplus')) return 0;
@@ -142,3 +213,4 @@ class InterfaceInventairePlusTriggers extends DolibarrTriggers
 		return 0;
 	}
 }
+

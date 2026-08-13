@@ -12,6 +12,8 @@
  * \brief       Shared helpers for custom inventory documents
  */
 
+require_once DOL_DOCUMENT_ROOT.'/custom/inventaireplus/lib/productcategory.lib.php';
+
 /**
  * Return a SQL subquery that resolves the retained category label for a product.
  * If several categories exist, the first label in alphabetical order is used.
@@ -105,13 +107,15 @@ function inventaireplusFetchInventoryDocumentLines($db, $inventoryId, $onlyDiscr
 	}
 
 	$lines = array();
-	$categorySql = "COALESCE(".inventaireplusGetInventoryCategoryLabelSubquery('p').", 'Non classé')";
+	$categoryIdSql = "COALESCE(".inventaireplusGetProductCategoryIdSubquery('p').", 0)";
+	$categorySql = "COALESCE(".inventaireplusGetProductCategoryLabelSubquery('p').", 'Non classé')";
 
 	$sql = "SELECT id.rowid, id.fk_inventory, id.fk_warehouse, id.fk_product, id.batch,";
 	$sql .= " id.qty_stock, id.qty_view, id.qty_regulated, id.pmp_real, id.pmp_expected,";
 	$sql .= " p.ref AS product_ref, p.label AS product_label,";
 	$sql .= " ef.product_ref_snapshot, ef.product_label_snapshot, ef.category_label_snapshot,";
 	$sql .= " ef.batch_snapshot, ef.eatby_snapshot, ef.sellby_snapshot, ef.justification_text,";
+	$sql .= " ".$categoryIdSql." AS category_id_default,";
 	$sql .= " ".$categorySql." AS category_label_default";
 	$sql .= " FROM ".MAIN_DB_PREFIX."inventorydet AS id";
 	$sql .= " LEFT JOIN ".MAIN_DB_PREFIX."product AS p ON p.rowid = id.fk_product";
@@ -149,6 +153,7 @@ function inventaireplusFetchInventoryDocumentLines($db, $inventoryId, $onlyDiscr
 			'batch' => (!empty($obj->batch_snapshot) ? (string) $obj->batch_snapshot : (string) $obj->batch),
 			'eatby' => $obj->eatby_snapshot,
 			'sellby' => $obj->sellby_snapshot,
+			'category_id' => (int) $obj->category_id_default,
 			'category_label' => $categoryLabel,
 			'qty_theoretical' => $qtyTheoretical,
 			'qty_physical' => $qtyPhysical,
@@ -209,28 +214,36 @@ function inventaireplusBuildInventoryDocumentDataset($db, $inventoryId, $onlyDis
 
 	foreach ($lines as $line) {
 		$categoryLabel = (!empty($line['category_label']) ? $line['category_label'] : 'Non classé');
-		if (!isset($dataset['categories'][$categoryLabel])) {
-			$dataset['categories'][$categoryLabel] = array(
-				'label' => $categoryLabel,
-				'lines' => array(),
-				'total_theoretical' => 0.0,
-				'total_physical' => 0.0,
-				'total_delta' => 0.0,
-				'has_discrepancies' => false,
-			);
-		}
+		$categoryNodes = inventaireplusGetCategoryPathNodes($db, (int) ($line['category_id'] ?? 0), $categoryLabel);
+		$leafKey = $categoryNodes[count($categoryNodes) - 1]['key'];
+		foreach ($categoryNodes as $node) {
+			if (!isset($dataset['categories'][$node['key']])) {
+				$dataset['categories'][$node['key']] = array(
+					'label' => $node['label'],
+					'level' => (int) $node['level'],
+					'sort' => $node['sort'],
+					'lines' => array(),
+					'total_theoretical' => 0.0,
+					'total_physical' => 0.0,
+					'total_delta' => 0.0,
+					'has_discrepancies' => false,
+				);
+			}
 
-		$dataset['categories'][$categoryLabel]['lines'][] = $line;
-		$dataset['categories'][$categoryLabel]['total_theoretical'] += (float) $line['qty_theoretical'];
-		if ($line['qty_physical'] !== null) {
-			$dataset['categories'][$categoryLabel]['total_physical'] += (float) $line['qty_physical'];
-		}
-		if ($line['qty_delta'] !== null) {
-			$dataset['categories'][$categoryLabel]['total_delta'] += (float) $line['qty_delta'];
-		}
-		if (!empty($line['has_discrepancy'])) {
-			$dataset['categories'][$categoryLabel]['has_discrepancies'] = true;
-			$dataset['has_discrepancies'] = true;
+			if ($node['key'] === $leafKey) {
+				$dataset['categories'][$node['key']]['lines'][] = $line;
+			}
+			$dataset['categories'][$node['key']]['total_theoretical'] += (float) $line['qty_theoretical'];
+			if ($line['qty_physical'] !== null) {
+				$dataset['categories'][$node['key']]['total_physical'] += (float) $line['qty_physical'];
+			}
+			if ($line['qty_delta'] !== null) {
+				$dataset['categories'][$node['key']]['total_delta'] += (float) $line['qty_delta'];
+			}
+			if (!empty($line['has_discrepancy'])) {
+				$dataset['categories'][$node['key']]['has_discrepancies'] = true;
+				$dataset['has_discrepancies'] = true;
+			}
 		}
 
 		$dataset['line_count']++;
@@ -242,6 +255,7 @@ function inventaireplusBuildInventoryDocumentDataset($db, $inventoryId, $onlyDis
 			$dataset['total_delta'] += (float) $line['qty_delta'];
 		}
 	}
+	uasort($dataset['categories'], 'inventaireplusSortCategoryAggregates');
 
 	return $dataset;
 }

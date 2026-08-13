@@ -120,7 +120,7 @@ class modInventairePlus extends DolibarrModules
 			// Set here all hooks context managed by module. To find available hook context, make a "grep -r '>initHooks(' *" on source code. You can also set hook context to 'all'
 			/* BEGIN MODULEBUILDER HOOKSCONTEXTS */
 			'hooks' => array(
-				'data' => array('inventorycard'),
+				'data' => array('inventorycard', 'receptioncard', 'stocklist', 'stocklistInventairePlus', 'stockmovementlist', 'stockmovementlistInventairePlus', 'massstockmoveinventaireplus'),
 				'entity' => '0',
 			),
 			/* END MODULEBUILDER HOOKSCONTEXTS */
@@ -134,7 +134,7 @@ class modInventairePlus extends DolibarrModules
 
 		// Data directories to create when module is enabled.
 		// Example: this->dirs = array("/inventaireplus/temp","/inventaireplus/subdir");
-		$this->dirs = array("/inventaireplus/temp");
+		$this->dirs = array("/inventaireplus/temp", "/inventaireplus/stock_cashier_sheet");
 
 		// Config pages. Put here list of php page, stored into inventaireplus/admin directory, to use to setup module.
 		$this->config_page_url = array("setup.php@inventaireplus");
@@ -170,7 +170,12 @@ class modInventairePlus extends DolibarrModules
 		// Example: $this->const=array(1 => array('INVENTAIREPLUS_MYNEWCONST1', 'chaine', 'myvalue', 'This is a constant to add', 1),
 		//                             2 => array('INVENTAIREPLUS_MYNEWCONST2', 'chaine', 'myvalue', 'This is another constant to add', 0, 'current', 1)
 		// );
-		$this->const = array();
+				$this->const = array(
+			array('INVENTAIREPLUS_MAIN_WAREHOUSE_ID', 'chaine', '', 'Default source warehouse for mass stock transfers', 1, 'current', 1),
+			array('INVENTAIREPLUS_STOCK_SHEET_WAREHOUSE_ID', 'chaine', '', 'Warehouse used for cashier stock sheets', 1, 'current', 1),
+			array('INVENTAIREPLUS_STOCK_SHEET_ENABLED', 'chaine', '1', 'Enable cashier stock sheet generation', 1, 'current', 1),
+			array('INVENTAIREPLUS_RESTRICT_STOCK_SHEET', 'chaine', '0', 'Restrict cashier stock sheet to moved products', 1, 'current', 1),
+		);
 
 		// Some keys to add into the overwriting translation tables
 		/*$this->overwrite_translation = array(
@@ -290,6 +295,26 @@ class modInventairePlus extends DolibarrModules
 		$this->rights = array();
 		$r = 0;
 		// Add here entries to declare new permissions
+		$this->rights[$r][0] = $this->numero.sprintf("%02d", $r + 1);
+		$this->rights[$r][1] = 'Créer des transferts de stock en masse';
+		$this->rights[$r][4] = 'massstockmove';
+		$this->rights[$r][5] = 'create';
+		$r++;
+		$this->rights[$r][0] = $this->numero.sprintf("%02d", $r + 1);
+		$this->rights[$r][1] = 'Créer des mouvements de stock depuis InventairePlus';
+		$this->rights[$r][4] = 'stock';
+		$this->rights[$r][5] = 'create';
+		$r++;
+		$this->rights[$r][0] = $this->numero.sprintf("%02d", $r + 1);
+		$this->rights[$r][1] = 'Générer et imprimer la fiche de stock caissier';
+		$this->rights[$r][4] = 'stock_cashier_sheet';
+		$this->rights[$r][5] = 'read';
+		$r++;
+		$this->rights[$r][0] = $this->numero.sprintf("%02d", $r + 1);
+		$this->rights[$r][1] = 'Créer les mouvements de transfert de stock à partir d\'une réception';
+		$this->rights[$r][4] = 'transferreceptiontowarehouseinventaireplus';
+		$this->rights[$r][5] = 'write';
+		$r++;
 		/* BEGIN MODULEBUILDER PERMISSIONS */
 		/*
 		$o = 1;
@@ -317,6 +342,63 @@ class modInventairePlus extends DolibarrModules
 		$r = 0;
 		// Add here entries to declare new menus
 		/* BEGIN MODULEBUILDER TOPMENU */
+		$this->menu[$r++] = array(
+			'fk_menu' => 'fk_mainmenu=products,fk_leftmenu=stock',
+			'type' => 'left',
+			'titre' => 'WarehouseList',
+			'mainmenu' => 'products',
+			'leftmenu' => 'inventaireplus_stock_list',
+			'url' => '/inventaireplus/product/stock/list.php',
+			'langs' => 'stocks,inventaireplus@inventaireplus',
+			'position' => 1000 + $r,
+			'enabled' => 'isModEnabled("inventaireplus")',
+			'perms' => '$user->rights->stock->lire',
+			'target' => '',
+			'user' => 0,
+		);
+		$this->menu[$r++] = array(
+			'fk_menu' => 'fk_mainmenu=products,fk_leftmenu=stock',
+			'type' => 'left',
+			'titre' => 'MassStockTransfer',
+			'mainmenu' => 'products',
+			'leftmenu' => 'inventaireplus_massstockmove',
+			'url' => '/inventaireplus/product/stock/massstockmove.php',
+			'langs' => 'inventaireplus@inventaireplus',
+			'position' => 1000 + $r,
+			'enabled' => 'isModEnabled("inventaireplus")',
+			'perms' => '$user->hasRight("inventaireplus", "massstockmove", "create")',
+			'target' => '',
+			'user' => 0,
+		);
+		$this->menu[$r++] = array(
+			'fk_menu' => 'fk_mainmenu=products,fk_leftmenu=stock',
+			'type' => 'left',
+			'titre' => 'StockAtDate',
+			'mainmenu' => 'products',
+			'leftmenu' => 'inventaireplus_stockatdate',
+			'url' => '/inventaireplus/product/stock/stockatdate.php',
+			'langs' => 'inventaireplus@inventaireplus',
+			'position' => 1000 + $r,
+			'enabled' => 'isModEnabled("inventaireplus")',
+			'perms' => '$user->rights->stock->lire',
+			'target' => '',
+			'user' => 0,
+		);
+		$this->menu[$r++] = array(
+			'fk_menu' => 'fk_mainmenu=products,fk_leftmenu=stock',
+			'type' => 'left',
+			'titre' => 'StockCashierSheet',
+			'mainmenu' => 'products',
+			'leftmenu' => 'inventaireplus_stockcashiersheet',
+			'url' => '/inventaireplus/product/stock/stockcashiersheet.php',
+			'langs' => 'inventaireplus@inventaireplus',
+			'position' => 1000 + $r,
+			'enabled' => 'isModEnabled("inventaireplus")',
+			'perms' => '$user->hasRight("inventaireplus", "stock_cashier_sheet", "read")',
+			'target' => '',
+			'user' => 0,
+		);
+
 		/* 		$this->menu[$r++] = array(
 			'fk_menu' => '', // Will be stored into mainmenu + leftmenu. Use '' if this is a top menu. For left menu, use 'fk_mainmenu=xxx' or 'fk_mainmenu=xxx,fk_leftmenu=yyy' where xxx is mainmenucode and yyy is a leftmenucode
 			'type' => 'top', // This is a Top menu entry
@@ -504,6 +586,22 @@ class modInventairePlus extends DolibarrModules
 			$extrafields->addExtraField($inventoryPlusExtraField[0], $inventoryPlusExtraField[1], $inventoryPlusExtraField[2], 100, $inventoryPlusExtraField[3], $inventoryPlusExtraField[4], 0, 0, '', array('options' => array('' => null)), 0, '', '0', $inventoryPlusExtraField[5], '', '', 'inventaireplus@inventaireplus', '$conf->inventaireplus->enabled');
 			$extrafields->updateExtraField($inventoryPlusExtraField[0], $inventoryPlusExtraField[1], $inventoryPlusExtraField[2], 100, $inventoryPlusExtraField[3], $inventoryPlusExtraField[4], 0, 0, '', array('options' => array('' => null)), 0, '', '0', $inventoryPlusExtraField[5], '', '', 'inventaireplus@inventaireplus', '$conf->inventaireplus->enabled');
 		}
+		$stockMovementTransferExtraFields = array(
+			array('transfer_source', "Entrepôt source transfert", 'int', '', 'Entrepôt source figé pour le bordereau de transfert'),
+			array('transfer_target', "Entrepôt cible transfert", 'int', '', 'Entrepôt de destination figé pour le bordereau de transfert'),
+			array('transfer_category_id', "Catégorie transfert", 'int', '', 'Identifiant de catégorie figé pour le bordereau de transfert'),
+			array('transfer_category_label', "Libellé catégorie transfert", 'varchar', '255', 'Libellé de catégorie figé pour le bordereau de transfert'),
+			array('transfer_category_rank', "Rang catégorie transfert", 'int', '', "Ordre d'affichage de la catégorie sur le bordereau de transfert"),
+			array('transfer_pdf_file', "Fichier PDF transfert", 'varchar', '255', 'Chemin du dernier bordereau PDF généré pour ce transfert'),
+			array('transfer_pdf_generated_at', "Date génération PDF transfert", 'datetime', '', 'Date de génération du dernier bordereau PDF de transfert'),
+			array('transfer_origin_type', "Type origine transfert", 'varchar', '32', "Type de l'objet source du transfert"),
+			array('transfer_origin_id', "Origine réception transfert", 'sellist', '', 'Origine réception du transfert'),
+		);
+		foreach ($stockMovementTransferExtraFields as $stockMovementTransferExtraField) {
+			$extraFieldOptions = ($stockMovementTransferExtraField[0] === 'transfer_origin_id') ? array('options' => array('reception:ref:rowid' => null)) : array('options' => array('' => null));
+			$extrafields->addExtraField($stockMovementTransferExtraField[0], $stockMovementTransferExtraField[1], $stockMovementTransferExtraField[2], 100, $stockMovementTransferExtraField[3], 'stock_mouvement', 0, 0, '', $extraFieldOptions, 0, '', '0', $stockMovementTransferExtraField[4], '', '', 'inventaireplus@inventaireplus', '$conf->inventaireplus->enabled');
+			$extrafields->updateExtraField($stockMovementTransferExtraField[0], $stockMovementTransferExtraField[1], $stockMovementTransferExtraField[2], 100, $stockMovementTransferExtraField[3], 'stock_mouvement', 0, 0, '', $extraFieldOptions, 0, '', '0', $stockMovementTransferExtraField[4], '', '', 'inventaireplus@inventaireplus', '$conf->inventaireplus->enabled');
+		}
 		// Permissions
 		$this->remove($options);
 
@@ -557,4 +655,7 @@ class modInventairePlus extends DolibarrModules
 		return $this->_remove($sql, $options);
 	}
 }
+
+
+
 

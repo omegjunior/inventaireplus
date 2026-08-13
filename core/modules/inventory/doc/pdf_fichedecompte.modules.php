@@ -102,14 +102,18 @@ class pdf_fichedecompte extends ModelePDFFactures
 		$this->marge_haute = getDolGlobalInt('MAIN_PDF_MARGIN_TOP', 10);
 		$this->marge_basse = getDolGlobalInt('MAIN_PDF_MARGIN_BOTTOM', 10);
 		$this->emetteur = $mysoc;
+		$useBatch = isModEnabled('productbatch');
+		$designationWidth = ($useBatch ? 75 : 127);
 		$this->cols = array(
 			array('key' => 'num', 'label' => 'N°', 'width' => 9, 'align' => 'C'),
 			array('key' => 'ref', 'label' => 'REF PRODUIT', 'width' => 25, 'align' => 'L'),
-			array('key' => 'designation', 'label' => 'DESIGNATION', 'width' => 75, 'align' => 'L'),
-			array('key' => 'lot', 'label' => 'LOT', 'width' => 24, 'align' => 'L'),
-			array('key' => 'expiry', 'label' => 'DATE DE PEREMPTION', 'width' => 28, 'align' => 'C'),
-			array('key' => 'qtyphysical', 'label' => 'QUANTITE PHYSIQUE', 'width' => 29, 'align' => 'C'),
+			array('key' => 'designation', 'label' => 'DESIGNATION', 'width' => $designationWidth, 'align' => 'L'),
 		);
+		if ($useBatch) {
+			$this->cols[] = array('key' => 'lot', 'label' => 'LOT', 'width' => 24, 'align' => 'L');
+			$this->cols[] = array('key' => 'expiry', 'label' => 'DATE DE PEREMPTION', 'width' => 28, 'align' => 'C');
+		}
+		$this->cols[] = array('key' => 'qtyphysical', 'label' => 'QUANTITE PHYSIQUE', 'width' => 29, 'align' => 'C');
 	}
 
 	/**
@@ -170,7 +174,7 @@ class pdf_fichedecompte extends ModelePDFFactures
 		$pdf->SetTextColor(0, 0, 0);
 		$pdf->SetTitle($outputlangs->convToOutputCharset('FICHE DE DECOMPTE DES PRODUITS '.(!empty($dataset['context']['inventory_ref']) ? $dataset['context']['inventory_ref'] : $inventoryId)));
 		$pdf->SetSubject($outputlangs->convToOutputCharset('Fiche de décompte des produits'));
-		$pdf->SetCreator('DoliCSVH '.DOL_VERSION);
+		$pdf->SetCreator('InventairePlus '.DOL_VERSION);
 		$pdf->SetAuthor($mysoc->name.($user->id > 0 ? ' - '.$outputlangs->convToOutputCharset($user->getFullName($outputlangs)) : ''));
 		$pdf->Open();
 		$pdf->AddPage('P');
@@ -190,7 +194,8 @@ class pdf_fichedecompte extends ModelePDFFactures
 
 			$pdf->SetFont('', 'B', $defaultFontSize - 1);
 			$pdf->SetXY($this->marge_gauche, $y);
-			$pdf->MultiCell($this->getTableWidth(), $categoryRowHeight, $outputlangs->convToOutputCharset($category['label']), 1, 'C', false, 1, '', '', true, 0, false, true, 7, 'M', true);
+			$categoryLabel = str_repeat('   ', (int) ($category['level'] ?? 0)).$category['label'];
+			$pdf->MultiCell($this->getTableWidth(), $categoryRowHeight, $outputlangs->convToOutputCharset($categoryLabel), 1, ((int) ($category['level'] ?? 0) > 0 ? 'L' : 'C'), false, 1, '', '', true, 0, false, true, 7, 'M', true);
 			$y += $categoryRowHeight;
 
 			foreach ($category['lines'] as $line) {
@@ -205,17 +210,17 @@ class pdf_fichedecompte extends ModelePDFFactures
 				$pdf->SetFont('', '', $defaultFontSize - 1);
 
 				$cells = array(
-					(string) $lineNumber,
-					(string) $line['product_ref'],
-					(string) $line['product_label'],
-					(string) $line['batch'],
-					$this->formatExpiryDate($line),
-					'',
+					'num' => (string) $lineNumber,
+					'ref' => (string) $line['product_ref'],
+					'designation' => (string) $line['product_label'],
+					'lot' => (string) $line['batch'],
+					'expiry' => $this->formatExpiryDate($line),
+					'qtyphysical' => '',
 				);
 
-				foreach ($this->cols as $index => $col) {
+				foreach ($this->cols as $col) {
 					$pdf->SetXY($x, $y);
-					$pdf->MultiCell($col['width'], $rowHeight, $outputlangs->convToOutputCharset($cells[$index]), 1, $col['align'], false, 0, '', '', true, 0, false, true, $rowHeight, 'M');
+					$pdf->MultiCell($col['width'], $rowHeight, $outputlangs->convToOutputCharset($cells[$col['key']]), 1, $col['align'], false, 0, '', '', true, 0, false, true, $rowHeight, 'M');
 					$x += $col['width'];
 				}
 				$pdf->Ln();
@@ -388,19 +393,19 @@ class pdf_fichedecompte extends ModelePDFFactures
 		$pdf->SetFont('', '', $defaultFontSize - 1);
 		$maxLines = 1;
 		$texts = array(
-			(string) $line['product_ref'],
-			(string) $line['product_label'],
-			(string) $line['batch'],
-			$this->formatExpiryDate($line),
+			'ref' => (string) $line['product_ref'],
+			'designation' => (string) $line['product_label'],
+			'lot' => (string) $line['batch'],
+			'expiry' => $this->formatExpiryDate($line),
 		);
 
-		foreach ($texts as $index => $text) {
-			$colIndex = $index + 1;
-			if (!isset($this->cols[$colIndex])) {
+		foreach ($texts as $key => $text) {
+			$colWidth = $this->getColumnWidth($key);
+			if ($colWidth <= 0) {
 				continue;
 			}
 			if (method_exists($pdf, 'getNumLines')) {
-				$lineCount = max(1, (int) $pdf->getNumLines($pdf->GetStringWidth($text) > 0 ? $text : ' ', $this->cols[$colIndex]['width']));
+				$lineCount = max(1, (int) $pdf->getNumLines($pdf->GetStringWidth($text) > 0 ? $text : ' ', $colWidth));
 				$maxLines = max($maxLines, $lineCount);
 			}
 		}
@@ -457,6 +462,21 @@ class pdf_fichedecompte extends ModelePDFFactures
 		}
 
 		return $width;
+	}
+
+	/**
+	 * @param string $key Column key
+	 * @return float
+	 */
+	protected function getColumnWidth($key)
+	{
+		foreach ($this->cols as $col) {
+			if ($col['key'] === $key) {
+				return $col['width'];
+			}
+		}
+
+		return 0;
 	}
 }
 

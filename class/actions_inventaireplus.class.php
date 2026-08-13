@@ -198,17 +198,209 @@ class ActionsInventairePlus extends CommonHookActions
 		return 0;
 	}
 
+	protected function fetchStockMovementsForTransferPdf($movementIds = array(), $inventoryCode = '', $targetWarehouseId = 0)
+	{
+		$movementIds = array_values(array_filter(array_map('intval', (array) $movementIds)));
+		$rows = array();
+		if (empty($movementIds) && (empty($inventoryCode) || (int) $targetWarehouseId <= 0)) return $rows;
+
+		$sql = "SELECT sm.rowid, sm.inventorycode, sm.fk_entrepot, sm.type_mouvement, sm.label, sm.datem, sm.fk_product, sm.batch, sm.eatby, sm.sellby, sm.value, sm.price,";
+		$sql .= " p.ref AS product_ref, p.label AS product_label, p.tva_tx AS product_tva_tx,";
+		$sql .= " ef.transfer_source, ef.transfer_target, ef.transfer_category_id, ef.transfer_category_label, ef.transfer_category_rank, ef.transfer_origin_type, ef.transfer_origin_id, ef.transfer_pdf_file, ef.transfer_pdf_generated_at";
+		$sql .= " FROM ".MAIN_DB_PREFIX."stock_mouvement AS sm";
+		$sql .= " LEFT JOIN ".MAIN_DB_PREFIX."stock_mouvement_extrafields AS ef ON ef.fk_object = sm.rowid";
+		$sql .= " LEFT JOIN ".MAIN_DB_PREFIX."product AS p ON p.rowid = sm.fk_product";
+		if (!empty($movementIds)) {
+			$sql .= " WHERE sm.rowid IN (".implode(',', $movementIds).")";
+			$sql .= " ORDER BY sm.inventorycode ASC, CAST(COALESCE(NULLIF(ef.transfer_category_rank, ''), '999') AS SIGNED) ASC, ef.transfer_category_label ASC, sm.rowid ASC";
+		} else {
+			$sql .= " WHERE sm.inventorycode = '".$this->db->escape($inventoryCode)."'";
+			$sql .= " AND sm.fk_entrepot = ".((int) $targetWarehouseId);
+			$sql .= " AND sm.type_mouvement = 0";
+			$sql .= " ORDER BY CAST(COALESCE(NULLIF(ef.transfer_category_rank, ''), '999') AS SIGNED) ASC, ef.transfer_category_label ASC, sm.rowid ASC";
+		}
+		$resql = $this->db->query($sql);
+		if (!$resql) return $rows;
+		while ($obj = $this->db->fetch_object($resql)) {
+			$rows[] = array(
+				'rowid' => (int) $obj->rowid,
+				'inventorycode' => (string) $obj->inventorycode,
+				'fk_entrepot' => (int) $obj->fk_entrepot,
+				'type_mouvement' => (int) $obj->type_mouvement,
+				'label' => (string) $obj->label,
+				'datem' => $obj->datem,
+				'fk_product' => (int) $obj->fk_product,
+				'batch' => (string) $obj->batch,
+				'eatby' => $obj->eatby,
+				'sellby' => $obj->sellby,
+				'value' => $obj->value,
+				'price' => $obj->price,
+				'product_ref' => (string) $obj->product_ref,
+				'product_label' => (string) $obj->product_label,
+				'product_tva_tx' => (float) price2num($obj->product_tva_tx, 'MU'),
+				'transfer_source' => (int) $obj->transfer_source,
+				'transfer_target' => (int) $obj->transfer_target,
+				'transfer_category_id' => (int) $obj->transfer_category_id,
+				'transfer_category_label' => (string) $obj->transfer_category_label,
+				'transfer_category_rank' => (int) $obj->transfer_category_rank,
+				'transfer_origin_type' => (string) $obj->transfer_origin_type,
+				'transfer_origin_id' => (int) $obj->transfer_origin_id,
+				'transfer_pdf_file' => (string) $obj->transfer_pdf_file,
+				'transfer_pdf_generated_at' => $obj->transfer_pdf_generated_at,
+			);
+		}
+		$this->db->free($resql);
+		return $rows;
+	}
+
+	protected function inferStockTransferCategorySnapshot($productId)
+	{
+		$sql = "SELECT cp.fk_categorie, c.label FROM ".MAIN_DB_PREFIX."categorie_product AS cp INNER JOIN ".MAIN_DB_PREFIX."categorie AS c ON c.rowid = cp.fk_categorie WHERE cp.fk_product = ".((int) $productId)." AND c.type = 0 AND c.entity IN (".getEntity('category').") ORDER BY c.label ASC, c.rowid ASC LIMIT 1";
+		$resql = $this->db->query($sql);
+		if ($resql) {
+			$obj = $this->db->fetch_object($resql);
+			$this->db->free($resql);
+			if ($obj) return array('id' => (int) $obj->fk_categorie, 'label' => (string) $obj->label);
+		}
+		return array('id' => 0, 'label' => 'Non classé');
+	}
+
+	protected function inferTransferSourceWarehouse($inventoryCode, $targetWarehouseId)
+	{
+		if (empty($inventoryCode) || (int) $targetWarehouseId <= 0) return 0;
+		$sql = "SELECT sm.fk_entrepot FROM ".MAIN_DB_PREFIX."stock_mouvement AS sm WHERE sm.inventorycode = '".$this->db->escape($inventoryCode)."' AND sm.fk_entrepot <> ".((int) $targetWarehouseId)." AND sm.type_mouvement = 1 ORDER BY sm.rowid ASC LIMIT 1";
+		$resql = $this->db->query($sql);
+		if (!$resql) return 0;
+		$obj = $this->db->fetch_object($resql);
+		$this->db->free($resql);
+		return $obj ? (int) $obj->fk_entrepot : 0;
+	}
+
+	protected function completeStockTransferRowsForPdf(array &$rows)
+	{
+		$categoryCache = array();
+		$sourceWarehouseCache = array();
+		foreach ($rows as $key => $row) {
+			$targetWarehouseId = (!empty($row['transfer_target']) ? (int) $row['transfer_target'] : (int) $row['fk_entrepot']);
+			if ($targetWarehouseId > 0 && empty($rows[$key]['transfer_target'])) $rows[$key]['transfer_target'] = $targetWarehouseId;
+			if (empty($rows[$key]['transfer_category_label'])) {
+				$productId = (int) $row['fk_product'];
+				if (!array_key_exists($productId, $categoryCache)) $categoryCache[$productId] = $this->inferStockTransferCategorySnapshot($productId);
+				$rows[$key]['transfer_category_id'] = (int) $categoryCache[$productId]['id'];
+				$rows[$key]['transfer_category_label'] = (string) $categoryCache[$productId]['label'];
+				if (empty($rows[$key]['transfer_category_rank'])) $rows[$key]['transfer_category_rank'] = 999;
+			}
+			if (!empty($rows[$key]['transfer_source']) || empty($row['inventorycode']) || $targetWarehouseId <= 0) continue;
+			$cacheKey = $row['inventorycode'].'|'.$targetWarehouseId;
+			if (!array_key_exists($cacheKey, $sourceWarehouseCache)) $sourceWarehouseCache[$cacheKey] = $this->inferTransferSourceWarehouse($row['inventorycode'], $targetWarehouseId);
+			if ((int) $sourceWarehouseCache[$cacheKey] > 0) $rows[$key]['transfer_source'] = (int) $sourceWarehouseCache[$cacheKey];
+		}
+	}
+
+	protected function validateStockTransferPdfSelection($movementIds)
+	{
+		$result = array('ok' => false, 'message' => '', 'inventorycode' => '', 'sourcewarehouseid' => 0, 'targetwarehouseid' => 0);
+		$movementIds = array_values(array_filter(array_map('intval', (array) $movementIds)));
+		if (empty($movementIds)) { $result['message'] = 'Sélection vide pour la génération du bordereau de transfert.'; return $result; }
+		$selectedRows = $this->fetchStockMovementsForTransferPdf($movementIds);
+		$this->completeStockTransferRowsForPdf($selectedRows);
+		if (empty($selectedRows)) { $result['message'] = 'Aucun mouvement de stock sélectionné n\'a été retrouvé.'; return $result; }
+		$inventoryCodes = array(); $sourceWarehouseIds = array(); $targetWarehouseIds = array();
+		foreach ($selectedRows as $selectedRow) {
+			if (empty($selectedRow['inventorycode'])) { $result['message'] = 'Sélection invalide : au moins une ligne n\'a pas de code mouvement.'; return $result; }
+			$targetWarehouseId = (!empty($selectedRow['transfer_target']) ? (int) $selectedRow['transfer_target'] : (int) $selectedRow['fk_entrepot']);
+			$sourceWarehouseId = (int) $selectedRow['transfer_source'];
+			if ($targetWarehouseId <= 0 || $sourceWarehouseId <= 0) { $result['message'] = 'Sélection invalide : métadonnées de transfert incomplètes sur au moins une ligne.'; return $result; }
+			$inventoryCodes[$selectedRow['inventorycode']] = true; $sourceWarehouseIds[$sourceWarehouseId] = true; $targetWarehouseIds[$targetWarehouseId] = true;
+		}
+		if (count($inventoryCodes) !== 1 || count($sourceWarehouseIds) !== 1 || count($targetWarehouseIds) !== 1) { $result['message'] = 'La sélection doit porter sur un seul transfert source/cible.'; return $result; }
+		$result['ok'] = true; $result['inventorycode'] = (string) key($inventoryCodes); $result['sourcewarehouseid'] = (int) key($sourceWarehouseIds); $result['targetwarehouseid'] = (int) key($targetWarehouseIds);
+		return $result;
+	}
+
+	protected function validateWarehouseStockPdfSelection($warehouseIds)
+	{
+		$warehouseIds = array_values(array_unique(array_filter(array_map('intval', (array) $warehouseIds))));
+		if (empty($warehouseIds)) return array('ok' => false, 'message' => 'Sélection vide pour la génération de l\'état du stock.');
+		return array('ok' => true, 'warehouseids' => $warehouseIds, 'message' => '');
+	}
+
+	public function doMassActions($parameters, &$object, &$action, $hookmanager)
+	{
+		global $langs;
+		if (empty($parameters['massaction'])) return 0;
+		$langs->load('inventaireplus@inventaireplus');
+		if ($parameters['massaction'] == 'builddocmovestockinventaireplus') {
+			$toselect = (!empty($parameters['toselect']) && is_array($parameters['toselect']) ? $parameters['toselect'] : GETPOST('toselect', 'array'));
+			$selectionCheck = $this->validateStockTransferPdfSelection($toselect);
+			if (empty($selectionCheck['ok'])) { $this->errors[] = $selectionCheck['message']; return -1; }
+			$allTransferRows = $this->fetchStockMovementsForTransferPdf(array(), $selectionCheck['inventorycode'], $selectionCheck['targetwarehouseid']);
+			$this->completeStockTransferRowsForPdf($allTransferRows);
+			if (empty($allTransferRows)) { $this->errors[] = 'Aucune ligne de transfert complète retrouvée pour générer le bordereau.'; return -1; }
+			if (empty($parameters['diroutputmassaction'])) { $this->errors[] = 'Le répertoire de sortie massaction n\'est pas défini pour le bordereau de transfert.'; return -1; }
+			require_once DOL_DOCUMENT_ROOT.'/custom/inventaireplus/core/modules/stock/doc/pdf_transfertstock.modules.php';
+			$pdfParameters = array('inventorycode' => $selectionCheck['inventorycode'], 'sourcewarehouseid' => $selectionCheck['sourcewarehouseid'], 'targetwarehouseid' => $selectionCheck['targetwarehouseid'], 'movements' => $allTransferRows, 'selectedmovementids' => $toselect, 'diroutputmassaction' => $parameters['diroutputmassaction']);
+			$firstTransferRow = reset($allTransferRows);
+			if (!empty($firstTransferRow['transfer_origin_type'])) { $pdfParameters['transfer_origin_type'] = $firstTransferRow['transfer_origin_type']; $pdfParameters['transfer_origin_id'] = (int) $firstTransferRow['transfer_origin_id']; }
+			$pdfModel = new pdf_transfertstock($this->db);
+			$res = $pdfModel->write_file($pdfParameters, $this->getOutputLangs());
+			if ($res > 0) {
+				$generatedFile = (!empty($pdfModel->result['fullpath']) ? $pdfModel->result['fullpath'] : '');
+				if (!empty($generatedFile)) { $generatedAt = $this->db->idate(dol_now()); foreach ($allTransferRows as $transferRow) { $sql = "UPDATE ".MAIN_DB_PREFIX."stock_mouvement_extrafields SET transfer_pdf_file = '".$this->db->escape($generatedFile)."', transfer_pdf_generated_at = '".$generatedAt."' WHERE fk_object = ".((int) $transferRow['rowid']); $this->db->query($sql); } }
+				$this->resprints = $langs->trans('StockTransferSlip'); return 0;
+			}
+			$this->errors[] = (!empty($pdfModel->error) ? $pdfModel->error : 'La génération du bordereau de transfert a échoué.'); return -1;
+		}
+		if ($parameters['massaction'] == 'builddocwarehousevaluationinventaireplus') {
+			$toselect = (!empty($parameters['toselect']) && is_array($parameters['toselect']) ? $parameters['toselect'] : GETPOST('toselect', 'array'));
+			$selectionCheck = $this->validateWarehouseStockPdfSelection($toselect);
+			if (empty($selectionCheck['ok'])) { $this->errors[] = $selectionCheck['message']; return -1; }
+			if (empty($parameters['diroutputmassaction'])) { $this->errors[] = 'Le répertoire de sortie massaction n\'est pas défini pour l\'état du stock.'; return -1; }
+			require_once DOL_DOCUMENT_ROOT.'/custom/inventaireplus/core/modules/stock/doc/pdf_valorisationstock.modules.php';
+			$generatedCount = 0;
+			foreach ($selectionCheck['warehouseids'] as $warehouseId) { $pdfModel = new pdf_valorisationstock($this->db); $res = $pdfModel->write_file(array('warehouseid' => (int) $warehouseId, 'diroutputmassaction' => $parameters['diroutputmassaction']), $this->getOutputLangs()); if ($res > 0) $generatedCount++; else $this->errors[] = (!empty($pdfModel->error) ? $pdfModel->error : 'La génération de l\'état du stock a échoué.'); }
+			if ($generatedCount > 0 && empty($this->errors)) { $this->resprints = $langs->trans('WarehouseStockValuation'); return 0; }
+			return -1;
+		}
+		return 0;
+	}
+
+	public function addMoreMassActions($parameters, &$object, &$action, $hookmanager)
+	{
+		global $langs;
+		$langs->load('inventaireplus@inventaireplus');
+		$this->resprints = '';
+		if (!empty($parameters['currentcontext']) && in_array($parameters['currentcontext'], array('stockmovementlist', 'stockmovementlistInventairePlus'), true)) $this->resprints .= '<option value="builddocmovestockinventaireplus" data-html="'.dol_escape_htmltag(img_picto('', 'pdf', 'class="pictofixedwidth"').$langs->trans('GeneratePDFMoveStock')).'">'.$langs->trans('GeneratePDFMoveStock').'</option>';
+		if (!empty($parameters['currentcontext']) && in_array($parameters['currentcontext'], array('stocklist', 'stocklistInventairePlus'), true)) $this->resprints .= '<option value="builddocwarehousevaluationinventaireplus" data-html="'.dol_escape_htmltag(img_picto('', 'pdf', 'class="pictofixedwidth"').$langs->trans('GenerateWarehouseValuationPDF')).'">'.$langs->trans('GenerateWarehouseValuationPDF').'</option>';
+		return 0;
+	}
+
+	public function selectProductsListWhere($parameters, &$object, &$action, $hookmanager)
+	{
+		if (empty($parameters['currentcontext']) || !in_array($parameters['currentcontext'], array('massstockmoveinventaireplus', 'stockmovementlistInventairePlus'), true)) return 0;
+		$warehouseId = ($parameters['currentcontext'] == 'massstockmoveinventaireplus') ? GETPOSTINT('id_sw') : GETPOSTINT('id');
+		if ($warehouseId > 0) $this->resprints = ' AND EXISTS (SELECT 1 FROM '.MAIN_DB_PREFIX.'product_stock psw WHERE psw.fk_product = p.rowid AND psw.fk_entrepot = '.((int) $warehouseId).')';
+		return 0;
+	}
 	public function addMoreActionsButtons($parameters, &$object, &$action, $hookmanager)
 	{
 		global $langs, $user;
+		$langs->load('inventaireplus@inventaireplus');
+		if (!empty($parameters['currentcontext']) && in_array($parameters['currentcontext'], array('receptioncard'), true)) {
+			if (empty($object) || !is_object($object) || empty($object->id) || empty($object->element) || $object->element !== 'reception') return 0;
+			if (!$user->hasRight('inventaireplus', 'transferreceptiontowarehouseinventaireplus', 'write')) return 0;
+			$status = isset($object->status) ? (int) $object->status : -1;
+			if ($status <= 0) return 0;
+			$url = dol_buildpath('/custom/inventaireplus/product/stock/massstockmove.php', 1).'?init=1&action=fromreception&receptionid='.(int) $object->id;
+			print '<a class="butAction" href="'.$url.'">'.$langs->trans('TransferReceptionToWarehouse').'</a>';
+			return 0;
+		}
 		if (empty($parameters['currentcontext']) || !in_array($parameters['currentcontext'], array('inventorycard'), true)) return 0;
 		if (empty($object) || !is_object($object) || empty($object->id) || empty($object->element) || $object->element !== 'inventory') return 0;
 		if (!($user->hasRight('stock', 'inventory_advance', 'write') || $user->hasRight('stock', 'creer'))) return 0;
 
-		$langs->load('inventaireplus@inventaireplus');
 		$status = isset($object->status) ? (int) $object->status : -1;
 		$currentPage = $_SERVER['PHP_SELF'];
-
 		if ($status === (int) $object::STATUS_VALIDATED) {
 			print '<a class="butAction" href="'.$currentPage.'?id='.(int) $object->id.'&action=buildcountsheetinventaireplus">'.$langs->trans('PrintInventoryCountSheet').'</a>';
 			print '<a class="butAction" href="'.$currentPage.'?id='.(int) $object->id.'&action=builddiscrepanciespdfinventaireplus">'.$langs->trans('GenerateInventoryDiscrepancyReport').'</a>';

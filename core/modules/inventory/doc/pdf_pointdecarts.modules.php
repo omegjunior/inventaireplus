@@ -51,17 +51,21 @@ class pdf_pointdecarts extends ModelePDFFactures
 		$this->marge_haute = getDolGlobalInt('MAIN_PDF_MARGIN_TOP', 10);
 		$this->marge_basse = getDolGlobalInt('MAIN_PDF_MARGIN_BOTTOM', 10);
 		$this->emetteur = $mysoc;
+		$useBatch = isModEnabled('productbatch');
+		$designationWidth = ($useBatch ? 43 : 83);
 		$this->cols = array(
 			array('key' => 'num', 'label' => 'N°', 'width' => 8, 'align' => 'C'),
 			array('key' => 'ref', 'label' => 'REF PRODUIT', 'width' => 20, 'align' => 'L'),
-			array('key' => 'designation', 'label' => 'DESIGNATION', 'width' => 43, 'align' => 'L'),
-			array('key' => 'lot', 'label' => 'LOT', 'width' => 18, 'align' => 'L'),
-			array('key' => 'expiry', 'label' => 'DATE DE PEREMPTION', 'width' => 22, 'align' => 'C'),
-			array('key' => 'qty_theoretical', 'label' => 'QTÉ THEORIQUE', 'width' => 18, 'align' => 'R'),
-			array('key' => 'qty_physical', 'label' => 'QTÉ PHYSIQUE', 'width' => 18, 'align' => 'R'),
-			array('key' => 'qty_delta', 'label' => 'ECART', 'width' => 13, 'align' => 'R'),
-			array('key' => 'justification', 'label' => 'JUSTIFICATION', 'width' => 30, 'align' => 'L'),
+			array('key' => 'designation', 'label' => 'DESIGNATION', 'width' => $designationWidth, 'align' => 'L'),
 		);
+		if ($useBatch) {
+			$this->cols[] = array('key' => 'lot', 'label' => 'LOT', 'width' => 18, 'align' => 'L');
+			$this->cols[] = array('key' => 'expiry', 'label' => 'DATE DE PEREMPTION', 'width' => 22, 'align' => 'C');
+		}
+		$this->cols[] = array('key' => 'qty_theoretical', 'label' => 'QTÉ THEORIQUE', 'width' => 18, 'align' => 'R');
+		$this->cols[] = array('key' => 'qty_physical', 'label' => 'QTÉ PHYSIQUE', 'width' => 18, 'align' => 'R');
+		$this->cols[] = array('key' => 'qty_delta', 'label' => 'ECART', 'width' => 13, 'align' => 'R');
+		$this->cols[] = array('key' => 'justification', 'label' => 'JUSTIFICATION', 'width' => 30, 'align' => 'L');
 	}
 
 	public function write_file($parameters, $outputlangs, $srctemplatepath = '', $hidedetails = 0, $hidedesc = 0, $hideref = 0)
@@ -111,7 +115,7 @@ class pdf_pointdecarts extends ModelePDFFactures
 		$pdf->SetTextColor(0, 0, 0);
 		$pdf->SetTitle($outputlangs->convToOutputCharset('POINT DES ECARTS '.(!empty($dataset['context']['inventory_ref']) ? $dataset['context']['inventory_ref'] : $inventoryId)));
 		$pdf->SetSubject($outputlangs->convToOutputCharset('Point des écarts'));
-		$pdf->SetCreator('DoliCSVH '.DOL_VERSION);
+		$pdf->SetCreator('InventairePlus '.DOL_VERSION);
 		$pdf->SetAuthor($mysoc->name.($user->id > 0 ? ' - '.$outputlangs->convToOutputCharset($user->getFullName($outputlangs)) : ''));
 		$pdf->Open();
 		$pdf->AddPage('P');
@@ -131,7 +135,9 @@ class pdf_pointdecarts extends ModelePDFFactures
 
 			$pdf->SetFont('', 'B', $defaultFontSize - 1);
 			$pdf->SetXY($this->marge_gauche, $y);
-			$pdf->MultiCell($this->getTableWidth(), $categoryRowHeight, $outputlangs->convToOutputCharset($category['label']), 1, 'C', false, 1, '', '', true, 0, false, true, 7, 'M', true);
+			$categoryLevel = (int) ($category['level'] ?? 0);
+			$categoryLabel = str_repeat('   ', $categoryLevel).$category['label'];
+			$pdf->MultiCell($this->getTableWidth(), $categoryRowHeight, $outputlangs->convToOutputCharset($categoryLabel), 1, ($categoryLevel > 0 ? 'L' : 'C'), false, 1, '', '', true, 0, false, true, 7, 'M', true);
 			$y += $categoryRowHeight;
 
 			foreach ($category['lines'] as $line) {
@@ -145,20 +151,20 @@ class pdf_pointdecarts extends ModelePDFFactures
 				$x = $this->marge_gauche;
 				$pdf->SetFont('', '', $defaultFontSize - 2);
 				$cells = array(
-					(string) $lineNumber,
-					(string) $line['product_ref'],
-					(string) $line['product_label'],
-					(string) $line['batch'],
-					$this->formatExpiryDate($line),
-					($line['qty_theoretical']),
-					($line['qty_physical']),
-					($line['qty_delta']),
-					(string) $line['justification_text'],
+					'num' => (string) $lineNumber,
+					'ref' => (string) $line['product_ref'],
+					'designation' => (string) $line['product_label'],
+					'lot' => (string) $line['batch'],
+					'expiry' => $this->formatExpiryDate($line),
+					'qty_theoretical' => (string) $line['qty_theoretical'],
+					'qty_physical' => (string) $line['qty_physical'],
+					'qty_delta' => (string) $line['qty_delta'],
+					'justification' => (string) $line['justification_text'],
 				);
 
-				foreach ($this->cols as $index => $col) {
+				foreach ($this->cols as $col) {
 					$pdf->SetXY($x, $y);
-					$pdf->MultiCell($col['width'], $rowHeight, $outputlangs->convToOutputCharset($cells[$index]), 1, $col['align'], false, 0, '', '', true, 0, false, true, $rowHeight, 'M');
+					$pdf->MultiCell($col['width'], $rowHeight, $outputlangs->convToOutputCharset($cells[$col['key']]), 1, $col['align'], false, 0, '', '', true, 0, false, true, $rowHeight, 'M');
 					$x += $col['width'];
 				}
 				$pdf->Ln();
@@ -169,19 +175,19 @@ class pdf_pointdecarts extends ModelePDFFactures
 			$pdf->SetFont('', 'B', $defaultFontSize - 2);
 			$x = $this->marge_gauche;
 			$pdf->SetXY($x, $y);
-			$pdf->MultiCell($this->getLeadingWidth(), 7, $outputlangs->convToOutputCharset('TOTAL '.$category['label']), 1, 'R', false, 0, '', '', true, 0, false, true, 7, 'M');
+			$pdf->MultiCell($this->getLeadingWidth(), 7, $outputlangs->convToOutputCharset('TOTAL '.str_repeat('   ', $categoryLevel).$category['label']), 1, 'R', false, 0, '', '', true, 0, false, true, 7, 'M');
 			$x += $this->getLeadingWidth();
 			$pdf->SetXY($x, $y);
-			$pdf->MultiCell($this->cols[5]['width'], 7, ($category['total_theoretical']), 1, 'R', false, 0, '', '', true, 0, false, true, 7, 'M');
-			$x += $this->cols[5]['width'];
+			$pdf->MultiCell($this->getColumnWidth('qty_theoretical'), 7, (string) $category['total_theoretical'], 1, 'R', false, 0, '', '', true, 0, false, true, 7, 'M');
+			$x += $this->getColumnWidth('qty_theoretical');
 			$pdf->SetXY($x, $y);
-			$pdf->MultiCell($this->cols[6]['width'], 7, ($category['total_physical']), 1, 'R', false, 0, '', '', true, 0, false, true, 7, 'M');
-			$x += $this->cols[6]['width'];
+			$pdf->MultiCell($this->getColumnWidth('qty_physical'), 7, (string) $category['total_physical'], 1, 'R', false, 0, '', '', true, 0, false, true, 7, 'M');
+			$x += $this->getColumnWidth('qty_physical');
 			$pdf->SetXY($x, $y);
-			$pdf->MultiCell($this->cols[7]['width'], 7, ($category['total_delta']), 1, 'R', false, 0, '', '', true, 0, false, true, 7, 'M');
-			$x += $this->cols[7]['width'];
+			$pdf->MultiCell($this->getColumnWidth('qty_delta'), 7, (string) $category['total_delta'], 1, 'R', false, 0, '', '', true, 0, false, true, 7, 'M');
+			$x += $this->getColumnWidth('qty_delta');
 			$pdf->SetXY($x, $y);
-			$pdf->MultiCell($this->cols[8]['width'], 7, '', 1, 'L', false, 1, '', '', true, 0, false, true, 7, 'M');
+			$pdf->MultiCell($this->getColumnWidth('justification'), 7, '', 1, 'L', false, 1, '', '', true, 0, false, true, 7, 'M');
 			$y += 7;
 		}
 
@@ -325,16 +331,20 @@ class pdf_pointdecarts extends ModelePDFFactures
 		$pdf->SetFont('', '', $defaultFontSize - 2);
 		$maxLines = 1;
 		$texts = array(
-			1 => (string) $line['product_ref'],
-			2 => (string) $line['product_label'],
-			3 => (string) $line['batch'],
-			4 => $this->formatExpiryDate($line),
-			8 => (string) $line['justification_text'],
+			'ref' => (string) $line['product_ref'],
+			'designation' => (string) $line['product_label'],
+			'lot' => (string) $line['batch'],
+			'expiry' => $this->formatExpiryDate($line),
+			'justification' => (string) $line['justification_text'],
 		);
 
-		foreach ($texts as $colIndex => $text) {
+		foreach ($texts as $key => $text) {
+			$colWidth = $this->getColumnWidth($key);
+			if ($colWidth <= 0) {
+				continue;
+			}
 			if (method_exists($pdf, 'getNumLines')) {
-				$lineCount = max(1, (int) $pdf->getNumLines($pdf->GetStringWidth($text) > 0 ? $text : ' ', $this->cols[$colIndex]['width']));
+				$lineCount = max(1, (int) $pdf->getNumLines($pdf->GetStringWidth($text) > 0 ? $text : ' ', $colWidth));
 				$maxLines = max($maxLines, $lineCount);
 			}
 		}
@@ -381,11 +391,25 @@ class pdf_pointdecarts extends ModelePDFFactures
 	protected function getLeadingWidth()
 	{
 		$width = 0;
-		for ($i = 0; $i <= 4; $i++) {
-			$width += $this->cols[$i]['width'];
+		foreach ($this->cols as $col) {
+			if ($col['key'] === 'qty_theoretical') {
+				break;
+			}
+			$width += $col['width'];
 		}
 
 		return $width;
+	}
+
+	protected function getColumnWidth($key)
+	{
+		foreach ($this->cols as $col) {
+			if ($col['key'] === $key) {
+				return $col['width'];
+			}
+		}
+
+		return 0;
 	}
 }
 

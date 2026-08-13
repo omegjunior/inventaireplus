@@ -1,0 +1,21 @@
+name: Deploy INVENTAIREPLUS to local XAMPP
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  deploy-local:
+    # Utiliser le runner local au lieu de ubuntu-latest
+    runs-on: self-hosted
+
+    steps:
+      - name: Synchroniser le module INVENTAIREPLUS avec le dépôt GitHub
+        shell: cmd
+        run: |
+          cd C:\xampp\htdocs\librairie-lnd\custom\inventaireplus
+          git fetch origin main
+          git reset --hard origin/main
+          echo Module INVENTAIREPLUS mis a jour le %date% a %time%
