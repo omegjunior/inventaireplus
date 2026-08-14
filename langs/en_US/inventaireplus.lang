@@ -58,3 +58,4 @@ INVENTAIREPLUS_STOCK_SHEET_ENABLED=Activer la génération des fiches de stock c
 INVENTAIREPLUS_RESTRICT_STOCK_SHEET=Restreindre la fiche de stock aux produits mouvementés sur la période
 RegisteredOffice=Siège social
 QtyInUnit=Quantité en unité respective de vente
+RecapTo=A l'attention de qui de droit

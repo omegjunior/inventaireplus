@@ -58,6 +58,7 @@ if (!$res) {
 // Libraries
 require_once DOL_DOCUMENT_ROOT."/core/lib/admin.lib.php";
 require_once '../lib/inventaireplus.lib.php';
+require_once DOL_DOCUMENT_ROOT.'/product/stock/class/entrepot.class.php';
 //require_once "../class/myclass.class.php";
 
 /**
@@ -131,7 +132,9 @@ if (!$user->admin) {
 // $item->setAsThirdpartyType();
 
 // // Setup conf for a selection of a boolean
-// $formSetup->newItem('INVENTAIREPLUS_MYPARAM5')->setAsYesNo();
+$formSetup->newItem('INVENTAIREPLUS_STOCK_SHEET_ENABLED')->setAsYesNo();
+$formSetup->newItem('INVENTAIREPLUS_RESTRICT_STOCK_SHEET')->setAsYesNo();
+
 
 // // Setup conf for a selection of an Email template of type thirdparty
 // $formSetup->newItem('INVENTAIREPLUS_MYPARAM6')->setAsEmailTemplate('thirdparty');
@@ -156,7 +159,14 @@ if (!$user->admin) {
 
 // // Setup conf for a simple combo list
 // $formSetup->newItem('INVENTAIREPLUS_MYPARAM9')->setAsSelect($TField);
-
+// Setup conf INVENTAIREPLUS_MAIN_WAREHOUSE_ID
+$entrepotList = new Entrepot($db);
+$TField = $entrepotList->list_array();
+$item = $formSetup->newItem('INVENTAIREPLUS_MAIN_WAREHOUSE_ID');
+$item->setAsSelect($TField);
+// Setup conf INVENTAIREPLUS_STOCK_SHEET_WAREHOUSE_ID
+$item = $formSetup->newItem('INVENTAIREPLUS_STOCK_SHEET_WAREHOUSE_ID');
+$item->setAsSelect($TField);
 // // Setup conf for a multiselect combo list
 // $item = $formSetup->newItem('INVENTAIREPLUS_MYPARAM10');
 // $item->setAsMultiSelect($TField);

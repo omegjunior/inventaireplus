@@ -170,7 +170,7 @@ class modInventairePlus extends DolibarrModules
 		// Example: $this->const=array(1 => array('INVENTAIREPLUS_MYNEWCONST1', 'chaine', 'myvalue', 'This is a constant to add', 1),
 		//                             2 => array('INVENTAIREPLUS_MYNEWCONST2', 'chaine', 'myvalue', 'This is another constant to add', 0, 'current', 1)
 		// );
-				$this->const = array(
+		$this->const = array(
 			array('INVENTAIREPLUS_MAIN_WAREHOUSE_ID', 'chaine', '', 'Default source warehouse for mass stock transfers', 1, 'current', 1),
 			array('INVENTAIREPLUS_STOCK_SHEET_WAREHOUSE_ID', 'chaine', '', 'Warehouse used for cashier stock sheets', 1, 'current', 1),
 			array('INVENTAIREPLUS_STOCK_SHEET_ENABLED', 'chaine', '1', 'Enable cashier stock sheet generation', 1, 'current', 1),
