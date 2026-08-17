@@ -71,7 +71,7 @@ class pdf_valorisationstock extends ModelePDFFactures
 		$this->cols = array(
 			array('key' => 'num', 'label' => 'N°', 'width' => 8, 'align' => 'C'),
 			array('key' => 'ref', 'label' => 'REF PRODUIT', 'width' => 25, 'align' => 'L'),
-			array('key' => 'designation', 'label' => 'DESIGNATION', 'width' => 38, 'align' => 'L'),
+			array('key' => 'designation', 'label' => 'DESIGNATION', 'width' => 36, 'align' => 'L'),
 		);
 		if (isModEnabled('productbatch')) {
 			$this->cols[] = array('key' => 'lot', 'label' => 'LOT', 'width' => 21, 'align' => 'L');
@@ -79,7 +79,7 @@ class pdf_valorisationstock extends ModelePDFFactures
 		} else {
 			$this->cols[2]['width'] = 83;
 		}
-		$this->cols[] = array('key' => 'qty', 'label' => 'QUANTITE', 'width' => 15, 'align' => 'R');
+		$this->cols[] = array('key' => 'qty', 'label' => 'QUANTITE', 'width' => 17, 'align' => 'R');
 		$this->cols[] = array('key' => 'purchase', 'label' => 'VALORISATION A L\'ACHAT', 'width' => 28, 'align' => 'R');
 		$this->cols[] = array('key' => 'sell', 'label' => 'VALORISATION A LA VENTE', 'width' => 31, 'align' => 'R');
 	}

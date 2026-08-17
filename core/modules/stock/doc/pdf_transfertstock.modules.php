@@ -108,8 +108,8 @@ class pdf_transfertstock extends ModelePDFFactures
 		$this->cols = array(
 			array('key' => 'num', 'label' => 'N°', 'width' => 9, 'align' => 'C'),
 			array('key' => 'ref', 'label' => 'REF PRODUIT', 'width' => 25, 'align' => 'L'),
-			array('key' => 'designation', 'label' => 'DESIGNATION', 'width' => 51, 'align' => 'L'),
-			array('key' => 'qty', 'label' => 'QUANTITE', 'width' => 15, 'align' => 'R'),
+			array('key' => 'designation', 'label' => 'DESIGNATION', 'width' => 49, 'align' => 'L'),
+			array('key' => 'qty', 'label' => 'QUANTITE', 'width' => 17, 'align' => 'R'),
 		);
 		if (isModEnabled('productbatch')) {
 			$this->cols[] = array('key' => 'lot', 'label' => 'LOT', 'width' => 23, 'align' => 'L');
