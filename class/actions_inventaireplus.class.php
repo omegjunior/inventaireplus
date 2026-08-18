@@ -41,6 +41,33 @@ class ActionsInventairePlus extends CommonHookActions
 		return false;
 	}
 
+	/**
+	 * Return true when DoliCsvh coexistence rules must be applied.
+	 *
+	 * @return bool
+	 */
+	protected function isDoliCsvhCompatibilityMode()
+	{
+		return (isModEnabled('dolicsvh') && getDolGlobalInt('INVENTAIREPLUS_COMPAT_DOLICSVH', 1));
+	}
+
+	/**
+	 * Return true when InventairePlus must hide actions already provided by DoliCsvh.
+	 *
+	 * @return bool
+	 */
+	protected function shouldHideDoliCsvhDuplicateActions()
+	{
+		if (!$this->isDoliCsvhCompatibilityMode()) {
+			return false;
+		}
+		if (getDolGlobalInt('INVENTAIREPLUS_FORCE_OWN_OVERLAPPING_ACTIONS', 0)) {
+			return false;
+		}
+
+		return (bool) getDolGlobalInt('INVENTAIREPLUS_HIDE_DOLICSVH_DUPLICATES', 1);
+	}
+
 	protected function upsertInventoryDocumentExtraFields($inventoryId, array $values)
 	{
 		$inventoryId = (int) $inventoryId;
@@ -382,6 +409,7 @@ class ActionsInventairePlus extends CommonHookActions
 		global $langs;
 		$langs->load('inventaireplus@inventaireplus');
 		$this->resprints = '';
+		if ($this->shouldHideDoliCsvhDuplicateActions()) return 0;
 		if (!empty($parameters['currentcontext']) && in_array($parameters['currentcontext'], array('stockmovementlist', 'stockmovementlistInventairePlus'), true)) $this->resprints .= '<option value="builddocmovestockinventaireplus" data-html="'.dol_escape_htmltag(img_picto('', 'pdf', 'class="pictofixedwidth"').$langs->trans('GeneratePDFMoveStock')).'">'.$langs->trans('GeneratePDFMoveStock').'</option>';
 		if (!empty($parameters['currentcontext']) && in_array($parameters['currentcontext'], array('stocklist', 'stocklistInventairePlus'), true)) $this->resprints .= '<option value="builddocwarehousevaluationinventaireplus" data-html="'.dol_escape_htmltag(img_picto('', 'pdf', 'class="pictofixedwidth"').$langs->trans('GenerateWarehouseValuationPDF')).'">'.$langs->trans('GenerateWarehouseValuationPDF').'</option>';
 		return 0;
@@ -630,6 +658,7 @@ class ActionsInventairePlus extends CommonHookActions
 		if (!empty($parameters['currentcontext']) && in_array($parameters['currentcontext'], array('receptioncard'), true)) {
 			if (empty($object) || !is_object($object) || empty($object->id) || empty($object->element) || $object->element !== 'reception') return 0;
 			if (!$user->hasRight('inventaireplus', 'transferreceptiontowarehouseinventaireplus', 'write')) return 0;
+			if ($this->shouldHideDoliCsvhDuplicateActions()) return 0;
 			$status = isset($object->status) ? (int) $object->status : -1;
 			if ($status <= 0) return 0;
 			$url = dol_buildpath('/custom/inventaireplus/product/stock/massstockmove.php', 1).'?init=1&action=fromreception&receptionid='.(int) $object->id;
@@ -642,17 +671,20 @@ class ActionsInventairePlus extends CommonHookActions
 
 		$status = isset($object->status) ? (int) $object->status : -1;
 		$currentPage = $_SERVER['PHP_SELF'];
+		$hideDoliCsvhDuplicates = $this->shouldHideDoliCsvhDuplicateActions();
 		if ($status === (int) $object::STATUS_VALIDATED) {
-			print '<a class="butAction" href="'.$currentPage.'?id='.(int) $object->id.'&action=buildcountsheetinventaireplus">'.$langs->trans('PrintInventoryCountSheet').'</a>';
-			print '<a class="butAction" href="'.$currentPage.'?id='.(int) $object->id.'&action=builddiscrepanciespdfinventaireplus">'.$langs->trans('GenerateInventoryDiscrepancyReport').'</a>';
-			print '<a class="butAction" href="'.dol_buildpath('/custom/inventaireplus/product/inventory/discrepancies.php', 1).'?id='.(int) $object->id.'&mainmenu=products">'.$langs->trans('EditInventoryJustifications').'</a>';
+			if (!$hideDoliCsvhDuplicates) {
+				print '<a class="butAction" href="'.$currentPage.'?id='.(int) $object->id.'&action=buildcountsheetinventaireplus">'.$langs->trans('PrintInventoryCountSheet').'</a>';
+				print '<a class="butAction" href="'.$currentPage.'?id='.(int) $object->id.'&action=builddiscrepanciespdfinventaireplus">'.$langs->trans('GenerateInventoryDiscrepancyReport').'</a>';
+				print '<a class="butAction" href="'.dol_buildpath('/custom/inventaireplus/product/inventory/discrepancies.php', 1).'?id='.(int) $object->id.'&mainmenu=products">'.$langs->trans('EditInventoryJustifications').'</a>';
+			}
 			if ($user->hasRight('inventaireplus', 'largeinventory', 'write')) {
 				$largeActionUrl = dol_buildpath('/custom/inventaireplus/product/inventory/volumeactions.php', 1).'?id='.(int) $object->id.'&token='.newToken();
 				print '<a class="butAction" href="'.$largeActionUrl.'&action=confirm_optimized_autofill">'.$langs->trans('InventoryPlusOptimizedAutofill').'</a>';
 				print '<a class="butAction" id="inventaireplus_optimized_record" href="'.$largeActionUrl.'&action=confirm_optimized_record">'.$langs->trans('InventoryPlusOptimizedRecord').'</a>';
 			}
 		}
-		if ($status === (int) $object::STATUS_RECORDED) {
+		if ($status === (int) $object::STATUS_RECORDED && !$hideDoliCsvhDuplicates) {
 			print '<a class="butAction" href="'.$currentPage.'?id='.(int) $object->id.'&action=buildinventoryminutesinventaireplus">'.$langs->trans('GenerateInventoryMinutes').'</a>';
 		}
 		return 0;

@@ -175,6 +175,9 @@ class modInventairePlus extends DolibarrModules
 			array('INVENTAIREPLUS_STOCK_SHEET_WAREHOUSE_ID', 'chaine', '', 'Warehouse used for cashier stock sheets', 1, 'current', 1),
 			array('INVENTAIREPLUS_STOCK_SHEET_ENABLED', 'chaine', '1', 'Enable cashier stock sheet generation', 1, 'current', 1),
 			array('INVENTAIREPLUS_RESTRICT_STOCK_SHEET', 'chaine', '0', 'Restrict cashier stock sheet to moved products', 1, 'current', 1),
+			array('INVENTAIREPLUS_COMPAT_DOLICSVH', 'chaine', '1', 'Enable compatibility mode when DoliCsvh is installed', 1, 'current', 1),
+			array('INVENTAIREPLUS_HIDE_DOLICSVH_DUPLICATES', 'chaine', '1', 'Hide InventairePlus actions already provided by DoliCsvh', 1, 'current', 1),
+			array('INVENTAIREPLUS_FORCE_OWN_OVERLAPPING_ACTIONS', 'chaine', '0', 'Force display of InventairePlus overlapping actions even when DoliCsvh is installed', 1, 'current', 1),
 		);
 
 		// Some keys to add into the overwriting translation tables
@@ -350,6 +353,7 @@ class modInventairePlus extends DolibarrModules
 		// Main menu entries to add
 		$this->menu = array();
 		$r = 0;
+		$enabledIfNoDoliCsvhDuplicate = 'isModEnabled("inventaireplus") && (!isModEnabled("dolicsvh") || !getDolGlobalInt("INVENTAIREPLUS_COMPAT_DOLICSVH", 1) || !getDolGlobalInt("INVENTAIREPLUS_HIDE_DOLICSVH_DUPLICATES", 1) || getDolGlobalInt("INVENTAIREPLUS_FORCE_OWN_OVERLAPPING_ACTIONS", 0))';
 		// Add here entries to declare new menus
 		/* BEGIN MODULEBUILDER TOPMENU */
 		$this->menu[$r++] = array(
@@ -361,7 +365,7 @@ class modInventairePlus extends DolibarrModules
 			'url' => '/inventaireplus/product/stock/list.php',
 			'langs' => 'inventaireplus@inventaireplus',
 			'position' => 1000 + $r,
-			'enabled' => 'isModEnabled("inventaireplus")',
+			'enabled' => $enabledIfNoDoliCsvhDuplicate,
 			'perms' => '$user->rights->stock->lire',
 			'target' => '',
 			'user' => 0,
@@ -375,7 +379,7 @@ class modInventairePlus extends DolibarrModules
 			'url' => '/inventaireplus/product/stock/massstockmove.php',
 			'langs' => 'inventaireplus@inventaireplus',
 			'position' => 1000 + $r,
-			'enabled' => 'isModEnabled("inventaireplus")',
+			'enabled' => $enabledIfNoDoliCsvhDuplicate,
 			'perms' => '$user->hasRight("inventaireplus", "massstockmove", "create")',
 			'target' => '',
 			'user' => 0,
@@ -389,7 +393,7 @@ class modInventairePlus extends DolibarrModules
 			'url' => '/inventaireplus/product/stock/stockatdate.php',
 			'langs' => 'inventaireplus@inventaireplus',
 			'position' => 1000 + $r,
-			'enabled' => 'isModEnabled("inventaireplus")',
+			'enabled' => $enabledIfNoDoliCsvhDuplicate,
 			'perms' => '$user->rights->stock->lire',
 			'target' => '',
 			'user' => 0,
@@ -403,7 +407,7 @@ class modInventairePlus extends DolibarrModules
 			'url' => '/inventaireplus/product/stock/stockcashiersheet.php',
 			'langs' => 'inventaireplus@inventaireplus',
 			'position' => 1000 + $r,
-			'enabled' => 'isModEnabled("inventaireplus")',
+			'enabled' => $enabledIfNoDoliCsvhDuplicate,
 			'perms' => '$user->hasRight("inventaireplus", "stock_cashier_sheet", "read")',
 			'target' => '',
 			'user' => 0,
