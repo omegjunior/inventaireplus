@@ -320,6 +320,11 @@ class modInventairePlus extends DolibarrModules
 		$this->rights[$r][4] = 'custominventoryselection';
 		$this->rights[$r][5] = 'create';
 		$r++;
+		$this->rights[$r][0] = $this->numero.sprintf("%02d", $r + 1);
+		$this->rights[$r][1] = 'Utiliser les traitements optimisés pour inventaires volumineux';
+		$this->rights[$r][4] = 'largeinventory';
+		$this->rights[$r][5] = 'write';
+		$r++;
 		/* BEGIN MODULEBUILDER PERMISSIONS */
 		/*
 		$o = 1;

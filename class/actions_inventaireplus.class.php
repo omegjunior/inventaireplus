@@ -443,21 +443,183 @@ class ActionsInventairePlus extends CommonHookActions
 
 	public function addHtmlHeader($parameters, &$object, &$action, $hookmanager)
 	{
-		global $langs, $user;
+		global $conf, $langs, $user;
 		if (!$this->hasHookContext($parameters, $hookmanager, 'inventorycard')) return 0;
-		if (strpos($_SERVER['PHP_SELF'], '/product/inventory/card.php') === false || $action !== 'create') return 0;
-		if (!(($user->hasRight('stock', 'inventory_advance', 'write') || $user->hasRight('stock', 'creer')) && $user->hasRight('inventaireplus', 'custominventoryselection', 'create'))) return 0;
 
 		$langs->load('inventaireplus@inventaireplus');
-		$url = dol_buildpath('/custom/inventaireplus/product/inventory/customselection.php', 1).'?mainmenu=products&leftmenu=stock_inventories';
-		$this->resprints = '<script>
-			jQuery(function() {
-				var target = jQuery(".tableforfieldcreate").first();
-				if (!target.length) return;
-				var html = "<div class=\"info clearboth inventaireplus-custom-selection-link\"><a class=\"button\" href=\"'.dol_escape_js($url).'\">'.dol_escape_js($langs->trans('InventoryPlusCustomSelectionTitle')).'</a> '.dol_escape_js($langs->trans('InventoryPlusCustomSelectionIntro')).'</div>";
-				target.before(html);
-			});
-		</script>';
+		$this->resprints = '';
+
+		if (strpos($_SERVER['PHP_SELF'], '/product/inventory/card.php') !== false && $action === 'create') {
+			if (!(($user->hasRight('stock', 'inventory_advance', 'write') || $user->hasRight('stock', 'creer')) && $user->hasRight('inventaireplus', 'custominventoryselection', 'create'))) return 0;
+			$url = dol_buildpath('/custom/inventaireplus/product/inventory/customselection.php', 1).'?mainmenu=products&leftmenu=stock_inventories';
+			$this->resprints .= '<script>
+				jQuery(function() {
+					var target = jQuery(".tableforfieldcreate").first();
+					if (!target.length) return;
+					var html = "<div class=\"info clearboth inventaireplus-custom-selection-link\"><a class=\"button\" href=\"'.dol_escape_js($url).'\">'.dol_escape_js($langs->trans('InventoryPlusCustomSelectionTitle')).'</a> '.dol_escape_js($langs->trans('InventoryPlusCustomSelectionIntro')).'</div>";
+					target.before(html);
+				});
+			</script>';
+		}
+
+		if (strpos($_SERVER['PHP_SELF'], '/product/inventory/inventory.php') !== false && !empty($object) && is_object($object) && !empty($object->id) && !empty($object->element) && $object->element === 'inventory' && (int) $object->status === (int) $object::STATUS_VALIDATED) {
+			if (empty($conf->use_javascript_ajax)) return 0;
+			if (!(($user->hasRight('stock', 'inventory_advance', 'write') || $user->hasRight('stock', 'mouvement', 'creer')) && $user->hasRight('inventaireplus', 'largeinventory', 'write'))) return 0;
+
+			$saveUrl = dol_buildpath('/custom/inventaireplus/product/inventory/volumeactions.php', 1);
+			$this->resprints .= '<script>
+				jQuery(function($) {
+					var form = $("#formrecord");
+					var nativeSave = $("#submitrecord");
+					if (!form.length || !nativeSave.length || $("#inventaireplus_optimized_save").length) return;
+
+					var endpoint = "'.dol_escape_js($saveUrl).'";
+					var inventoryId = '.((int) $object->id).';
+					var batchSize = 200;
+					var labels = {
+						save: "'.dol_escape_js($langs->trans('InventoryPlusOptimizedSave')).'",
+						saving: "'.dol_escape_js($langs->trans('InventoryPlusOptimizedSaveProgress')).'",
+						done: "'.dol_escape_js($langs->trans('InventoryPlusOptimizedSaveDone')).'",
+						error: "'.dol_escape_js($langs->trans('InventoryPlusOptimizedSaveFailed')).'",
+						noLine: "'.dol_escape_js($langs->trans('InventoryPlusOptimizedSaveNoLine')).'"
+					};
+
+					var optimizedSave = $("<input>", {
+						type: "button",
+						id: "inventaireplus_optimized_save",
+						class: "button button-save",
+						value: labels.save
+					});
+					var status = $("<span>", {
+						id: "inventaireplus_optimized_save_status",
+						class: "opacitymedium marginleftonly"
+					});
+					nativeSave.after(status).after(" ").after(optimizedSave);
+
+					function setStatus(message, isError) {
+						status.text(message || "");
+						status.toggleClass("error", !!isError);
+					}
+
+					function collectLines() {
+						var lines = [];
+						form.find("input.realqty").each(function() {
+							var match = /^id_(\\d+)_input$/.exec(this.id || "");
+							if (!match) return;
+							var lineId = match[1];
+							lines.push({
+								id: lineId,
+								qty_view: $(this).val(),
+								qty_stock: form.find("input[name=\"stock_qty_" + lineId + "\"]").val() || "",
+								pmp_real: form.find("input[name=\"realpmp_" + lineId + "\"]").val() || "",
+								pmp_expected: form.find("input[name=\"expectedpmp_" + lineId + "\"]").val() || ""
+							});
+						});
+						return lines;
+					}
+
+					function postBatch(batch) {
+						return $.ajax({
+							url: endpoint,
+							type: "POST",
+							dataType: "json",
+							data: {
+								action: "optimized_savelines",
+								id: inventoryId,
+								token: $("meta[name=\"anti-csrf-currenttoken\"]").attr("content") || form.find("input[name=\"token\"]").val(),
+								payload: JSON.stringify({lines: batch})
+							}
+						}).then(function(response) {
+							if (!response || !response.ok) {
+								return $.Deferred().reject(response && response.error ? response.error : labels.error).promise();
+							}
+							return response;
+						}, function(xhr) {
+							return $.Deferred().reject(xhr.responseText || labels.error).promise();
+						});
+					}
+
+					function saveOptimized() {
+						var lines = collectLines();
+						if (!lines.length) {
+							setStatus(labels.noLine, false);
+							return $.Deferred().resolve(0).promise();
+						}
+
+						var index = 0;
+						var updated = 0;
+						var chain = $.Deferred().resolve().promise();
+						optimizedSave.prop("disabled", true);
+						nativeSave.prop("disabled", true);
+						setStatus(labels.saving + " 0/" + lines.length, false);
+
+						while (index < lines.length) {
+							(function(batch, start) {
+								chain = chain.then(function() {
+									return postBatch(batch).then(function(response) {
+										updated += response.updated || 0;
+										for (var i = 0; i < batch.length; i++) {
+											form.find("input[name=\"id_" + batch[i].id + "_input_tmp\"]").val(batch[i].qty_view);
+										}
+										setStatus(labels.saving + " " + Math.min(start + batch.length, lines.length) + "/" + lines.length, false);
+									});
+								});
+							})(lines.slice(index, index + batchSize), index);
+							index += batchSize;
+						}
+
+						return chain.then(function() {
+							setStatus(labels.done.replace("%s", updated), false);
+							return updated;
+						}).fail(function(message) {
+							setStatus(labels.error + (message ? " : " + message : ""), true);
+						}).always(function() {
+							optimizedSave.prop("disabled", false);
+							nativeSave.prop("disabled", false);
+						});
+					}
+
+					optimizedSave.on("click.inventaireplus", function(e) {
+						e.preventDefault();
+						saveOptimized().done(function() {
+							window.location.reload();
+						});
+					});
+
+					nativeSave.on("click.inventaireplus", function(e) {
+						e.preventDefault();
+						e.stopImmediatePropagation();
+						saveOptimized().done(function() {
+							window.location.reload();
+						});
+						return false;
+					});
+
+					$(".paginationnext:last, .paginationprevious:last").on("click.inventaireplus", function(e) {
+						var targetUrl = this.href;
+						if (!targetUrl) return true;
+						e.preventDefault();
+						e.stopImmediatePropagation();
+						saveOptimized().done(function() {
+							window.location.href = targetUrl;
+						});
+						return false;
+					});
+
+					$("#inventaireplus_optimized_record").on("click.inventaireplus", function(e) {
+						var targetUrl = this.href;
+						if (!targetUrl) return true;
+						e.preventDefault();
+						e.stopImmediatePropagation();
+						saveOptimized().done(function() {
+							window.location.href = targetUrl;
+						});
+						return false;
+					});
+				});
+			</script>';
+		}
+
 		return 0;
 	}
 
@@ -484,6 +646,11 @@ class ActionsInventairePlus extends CommonHookActions
 			print '<a class="butAction" href="'.$currentPage.'?id='.(int) $object->id.'&action=buildcountsheetinventaireplus">'.$langs->trans('PrintInventoryCountSheet').'</a>';
 			print '<a class="butAction" href="'.$currentPage.'?id='.(int) $object->id.'&action=builddiscrepanciespdfinventaireplus">'.$langs->trans('GenerateInventoryDiscrepancyReport').'</a>';
 			print '<a class="butAction" href="'.dol_buildpath('/custom/inventaireplus/product/inventory/discrepancies.php', 1).'?id='.(int) $object->id.'&mainmenu=products">'.$langs->trans('EditInventoryJustifications').'</a>';
+			if ($user->hasRight('inventaireplus', 'largeinventory', 'write')) {
+				$largeActionUrl = dol_buildpath('/custom/inventaireplus/product/inventory/volumeactions.php', 1).'?id='.(int) $object->id;
+				print '<a class="butAction" href="'.$largeActionUrl.'&action=confirm_optimized_autofill">'.$langs->trans('InventoryPlusOptimizedAutofill').'</a>';
+				print '<a class="butAction" id="inventaireplus_optimized_record" href="'.$largeActionUrl.'&action=confirm_optimized_record">'.$langs->trans('InventoryPlusOptimizedRecord').'</a>';
+			}
 		}
 		if ($status === (int) $object::STATUS_RECORDED) {
 			print '<a class="butAction" href="'.$currentPage.'?id='.(int) $object->id.'&action=buildinventoryminutesinventaireplus">'.$langs->trans('GenerateInventoryMinutes').'</a>';
