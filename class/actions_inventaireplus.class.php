@@ -647,7 +647,7 @@ class ActionsInventairePlus extends CommonHookActions
 			print '<a class="butAction" href="'.$currentPage.'?id='.(int) $object->id.'&action=builddiscrepanciespdfinventaireplus">'.$langs->trans('GenerateInventoryDiscrepancyReport').'</a>';
 			print '<a class="butAction" href="'.dol_buildpath('/custom/inventaireplus/product/inventory/discrepancies.php', 1).'?id='.(int) $object->id.'&mainmenu=products">'.$langs->trans('EditInventoryJustifications').'</a>';
 			if ($user->hasRight('inventaireplus', 'largeinventory', 'write')) {
-				$largeActionUrl = dol_buildpath('/custom/inventaireplus/product/inventory/volumeactions.php', 1).'?id='.(int) $object->id;
+				$largeActionUrl = dol_buildpath('/custom/inventaireplus/product/inventory/volumeactions.php', 1).'?id='.(int) $object->id.'&token='.newToken();
 				print '<a class="butAction" href="'.$largeActionUrl.'&action=confirm_optimized_autofill">'.$langs->trans('InventoryPlusOptimizedAutofill').'</a>';
 				print '<a class="butAction" id="inventaireplus_optimized_record" href="'.$largeActionUrl.'&action=confirm_optimized_record">'.$langs->trans('InventoryPlusOptimizedRecord').'</a>';
 			}

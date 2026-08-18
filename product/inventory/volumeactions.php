@@ -53,12 +53,6 @@ if ($id <= 0 || $object->fetch($id) <= 0) {
 $backUrl = DOL_URL_ROOT.'/product/inventory/inventory.php?id='.(int) $object->id;
 
 if ($action === 'optimized_savelines') {
-	if (!checkToken()) {
-		header('Content-Type: application/json; charset=utf-8');
-		echo json_encode(array('ok' => false, 'error' => 'Invalid token'));
-		exit;
-	}
-
 	$payload = isset($_POST['payload']) ? (string) $_POST['payload'] : '';
 	$decodedPayload = json_decode($payload, true);
 	if (!is_array($decodedPayload)) {
@@ -81,9 +75,6 @@ if ($action === 'optimized_savelines') {
 }
 
 if ($action === 'optimized_autofill' || $action === 'optimized_record') {
-	if (!checkToken()) {
-		accessforbidden('Invalid token');
-	}
 	if ($confirm !== 'yes') {
 		header('Location: '.$backUrl);
 		exit;
