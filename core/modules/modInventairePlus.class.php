@@ -120,7 +120,7 @@ class modInventairePlus extends DolibarrModules
 			// Set here all hooks context managed by module. To find available hook context, make a "grep -r '>initHooks(' *" on source code. You can also set hook context to 'all'
 			/* BEGIN MODULEBUILDER HOOKSCONTEXTS */
 			'hooks' => array(
-				'data' => array('inventorycard', 'receptioncard', 'stocklist', 'stocklistInventairePlus', 'stockmovementlist', 'stockmovementlistInventairePlus', 'massstockmoveinventaireplus'),
+				'data' => array('leftblock', 'inventorycard', 'receptioncard', 'stocklist', 'stocklistInventairePlus', 'stockmovementlist', 'stockmovementlistInventairePlus', 'massstockmoveinventaireplus'),
 				'entity' => '0',
 			),
 			/* END MODULEBUILDER HOOKSCONTEXTS */
@@ -314,6 +314,11 @@ class modInventairePlus extends DolibarrModules
 		$this->rights[$r][1] = 'Créer les mouvements de transfert de stock à partir d\'une réception';
 		$this->rights[$r][4] = 'transferreceptiontowarehouseinventaireplus';
 		$this->rights[$r][5] = 'write';
+		$r++;
+		$this->rights[$r][0] = $this->numero.sprintf("%02d", $r + 1);
+		$this->rights[$r][1] = 'Créer un inventaire sur une sélection libre de produits';
+		$this->rights[$r][4] = 'custominventoryselection';
+		$this->rights[$r][5] = 'create';
 		$r++;
 		/* BEGIN MODULEBUILDER PERMISSIONS */
 		/*
@@ -655,6 +660,3 @@ class modInventairePlus extends DolibarrModules
 		return $this->_remove($sql, $options);
 	}
 }
-
-
-

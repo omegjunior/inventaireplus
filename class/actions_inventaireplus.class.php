@@ -29,6 +29,18 @@ class ActionsInventairePlus extends CommonHookActions
 		$this->db = $db;
 	}
 
+	protected function hasHookContext($parameters, $hookmanager, $context)
+	{
+		if (!empty($parameters['currentcontext']) && $parameters['currentcontext'] === $context) {
+			return true;
+		}
+		if (!empty($hookmanager->contextarray) && is_array($hookmanager->contextarray) && in_array($context, $hookmanager->contextarray, true)) {
+			return true;
+		}
+
+		return false;
+	}
+
 	protected function upsertInventoryDocumentExtraFields($inventoryId, array $values)
 	{
 		$inventoryId = (int) $inventoryId;
@@ -133,7 +145,7 @@ class ActionsInventairePlus extends CommonHookActions
 	public function doActions($parameters, &$object, &$action, $hookmanager)
 	{
 		global $langs, $user;
-		if (empty($parameters['currentcontext']) || !in_array($parameters['currentcontext'], array('inventorycard'), true)) return 0;
+		if (!$this->hasHookContext($parameters, $hookmanager, 'inventorycard')) return 0;
 		$langs->loadLangs(array('stocks', 'inventaireplus@inventaireplus'));
 
 		$managedActions = array('buildcountsheetinventaireplus', 'builddiscrepanciespdfinventaireplus', 'buildinventoryminutesinventaireplus');
@@ -186,7 +198,7 @@ class ActionsInventairePlus extends CommonHookActions
 
 	public function formDolBanner($parameters, &$object, &$action, $hookmanager)
 	{
-		if (empty($parameters['currentcontext']) || !in_array($parameters['currentcontext'], array('inventorycard'), true)) return 0;
+		if (!$this->hasHookContext($parameters, $hookmanager, 'inventorycard')) return 0;
 		if (empty($object) || !is_object($object) || empty($object->element) || $object->element !== 'inventory') return 0;
 
 		$existingMoreParam = (!empty($parameters['moreparam']) && is_string($parameters['moreparam'])) ? ltrim($parameters['moreparam'], '&') : '';
@@ -382,6 +394,73 @@ class ActionsInventairePlus extends CommonHookActions
 		if ($warehouseId > 0) $this->resprints = ' AND EXISTS (SELECT 1 FROM '.MAIN_DB_PREFIX.'product_stock psw WHERE psw.fk_product = p.rowid AND psw.fk_entrepot = '.((int) $warehouseId).')';
 		return 0;
 	}
+
+	public function menuLeftMenuItems($parameters, &$hook_items, &$action, $hookmanager)
+	{
+		global $langs, $user;
+
+		if (empty($parameters['mainmenu']) || $parameters['mainmenu'] !== 'products') return 0;
+		if (empty($parameters['context']) || (strpos($parameters['context'], 'leftblock') === false && strpos($parameters['context'], 'main') === false)) return 0;
+		if (!(($user->hasRight('stock', 'inventory_advance', 'write') || $user->hasRight('stock', 'creer')) && $user->hasRight('inventaireplus', 'custominventoryselection', 'create'))) return 0;
+		if (!is_array($hook_items)) return 0;
+
+		$langs->load('inventaireplus@inventaireplus');
+		$customSelectionMenu = array(
+			'url' => '/custom/inventaireplus/product/inventory/customselection.php?mainmenu=products&leftmenu=stock_inventories',
+			'titre' => $langs->trans('InventoryPlusCustomSelectionMenu'),
+			'level' => 1,
+			'enabled' => 1,
+			'target' => '',
+			'mainmenu' => 'products',
+			'leftmenu' => 'inventaireplus_custom_inventory_selection',
+			'position' => 0,
+			'id' => '',
+			'idsel' => '',
+			'classname' => '',
+			'prefix' => '',
+		);
+
+		$menuItems = array();
+		$inserted = false;
+		$filtered = false;
+		foreach ($hook_items as $item) {
+			if ((!empty($item['leftmenu']) && $item['leftmenu'] === 'inventaireplus_custom_inventory_selection') || (!empty($item['url']) && strpos($item['url'], '/custom/inventaireplus/product/inventory/customselection.php') === 0)) {
+				$filtered = true;
+				continue;
+			}
+			$menuItems[] = $item;
+			if (!$inserted && !empty($item['url']) && strpos($item['url'], '/product/inventory/card.php') === 0 && strpos($item['url'], 'action=create') !== false && strpos($item['url'], 'leftmenu=stock_inventories') !== false) {
+				$menuItems[] = $customSelectionMenu;
+				$inserted = true;
+			}
+		}
+
+		if (!$inserted && !$filtered) return 0;
+
+		$this->results = $menuItems;
+		return 1;
+	}
+
+	public function addHtmlHeader($parameters, &$object, &$action, $hookmanager)
+	{
+		global $langs, $user;
+		if (!$this->hasHookContext($parameters, $hookmanager, 'inventorycard')) return 0;
+		if (strpos($_SERVER['PHP_SELF'], '/product/inventory/card.php') === false || $action !== 'create') return 0;
+		if (!(($user->hasRight('stock', 'inventory_advance', 'write') || $user->hasRight('stock', 'creer')) && $user->hasRight('inventaireplus', 'custominventoryselection', 'create'))) return 0;
+
+		$langs->load('inventaireplus@inventaireplus');
+		$url = dol_buildpath('/custom/inventaireplus/product/inventory/customselection.php', 1).'?mainmenu=products&leftmenu=stock_inventories';
+		$this->resprints = '<script>
+			jQuery(function() {
+				var target = jQuery(".tableforfieldcreate").first();
+				if (!target.length) return;
+				var html = "<div class=\"info clearboth inventaireplus-custom-selection-link\"><a class=\"button\" href=\"'.dol_escape_js($url).'\">'.dol_escape_js($langs->trans('InventoryPlusCustomSelectionTitle')).'</a> '.dol_escape_js($langs->trans('InventoryPlusCustomSelectionIntro')).'</div>";
+				target.before(html);
+			});
+		</script>';
+		return 0;
+	}
+
 	public function addMoreActionsButtons($parameters, &$object, &$action, $hookmanager)
 	{
 		global $langs, $user;
@@ -395,7 +474,7 @@ class ActionsInventairePlus extends CommonHookActions
 			print '<a class="butAction" href="'.$url.'">'.$langs->trans('TransferReceptionToWarehouse').'</a>';
 			return 0;
 		}
-		if (empty($parameters['currentcontext']) || !in_array($parameters['currentcontext'], array('inventorycard'), true)) return 0;
+		if (!$this->hasHookContext($parameters, $hookmanager, 'inventorycard')) return 0;
 		if (empty($object) || !is_object($object) || empty($object->id) || empty($object->element) || $object->element !== 'inventory') return 0;
 		if (!($user->hasRight('stock', 'inventory_advance', 'write') || $user->hasRight('stock', 'creer'))) return 0;
 
