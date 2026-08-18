@@ -134,6 +134,10 @@ if (!$user->admin) {
 // // Setup conf for a selection of a boolean
 $formSetup->newItem('INVENTAIREPLUS_STOCK_SHEET_ENABLED')->setAsYesNo();
 $formSetup->newItem('INVENTAIREPLUS_RESTRICT_STOCK_SHEET')->setAsYesNo();
+$formSetup->newItem('InventairePlusDoliCsvhCompatibility')->setAsTitle();
+$formSetup->newItem('INVENTAIREPLUS_COMPAT_DOLICSVH')->setAsYesNo();
+$formSetup->newItem('INVENTAIREPLUS_HIDE_DOLICSVH_DUPLICATES')->setAsYesNo();
+$formSetup->newItem('INVENTAIREPLUS_FORCE_OWN_OVERLAPPING_ACTIONS')->setAsYesNo();
 
 
 // // Setup conf for a selection of an Email template of type thirdparty
@@ -349,6 +353,9 @@ print dol_get_fiche_head($head, 'settings', $langs->trans($title), -1, "inventai
 
 // Setup page goes here
 echo '<span class="opacitymedium">'.$langs->trans("InventairePlusSetupPage").'</span><br><br>';
+if (isModEnabled('dolicsvh')) {
+	print '<div class="info">'.$langs->trans('InventoryPlusDoliCsvhCompatibilityDetected').'</div>';
+}
 
 
 /*if ($action == 'edit') {
