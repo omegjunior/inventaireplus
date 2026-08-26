@@ -287,32 +287,46 @@ class pdf_stockcashiersheet extends ModelePDFFactures
 
 		if (file_exists($dir)) {
 
-			$entreesExpr = "COALESCE(SUM(CASE WHEN sm.value > 0 THEN sm.value ELSE 0 END), 0)";
-			$sortiesExpr = "COALESCE(SUM(CASE WHEN sm.value < 0 THEN -sm.value ELSE 0 END), 0)";
-			$stockInitialExpr = "(ps.reel - COALESCE(SUM(sm.value), 0))";
+			$entreesExpr = "COALESCE(pm.entrees, 0)";
+			$sortiesExpr = "COALESCE(pm.sorties, 0)";
+			$periodMovementExpr = "COALESCE(pm.period_value, 0)";
+			$afterMovementExpr = "COALESCE(am.after_value, 0)";
+			$stockFinalExpr = "(ps.reel - ".$afterMovementExpr.")";
+			$stockInitialExpr = "(".$stockFinalExpr." - ".$periodMovementExpr.")";
 
-			$sql  = "SELECT p.ref, p.label, ps.reel AS stock_final, ";//concat (u.lastname, ' ', u.firstname) AS caissier, 
+			$sql  = "SELECT p.ref, p.label, ".$stockFinalExpr." AS stock_final, ";//concat (u.lastname, ' ', u.firstname) AS caissier, 
 			$sql .= $entreesExpr." AS entrees, ";
 			$sql .= $sortiesExpr." AS sorties, ";
 			$sql .= $stockInitialExpr." AS stock_initial ";
 			$sql .= "FROM ".MAIN_DB_PREFIX."product AS p ";
 			$sql .= "JOIN ".MAIN_DB_PREFIX."product_stock AS ps ON p.rowid = ps.fk_product ";
 			$sql .= "JOIN ".MAIN_DB_PREFIX."entrepot AS e ON e.rowid = ps.fk_entrepot ";
-			$sql .= "LEFT JOIN ".MAIN_DB_PREFIX."stock_mouvement AS sm ON p.rowid = sm.fk_product ";
-			//$sql .= "LEFT JOIN ".MAIN_DB_PREFIX."user AS u ON sm.fk_user_author = u.rowid ";
-			$sql .= "AND ps.fk_entrepot = sm.fk_entrepot ";
-			$sql .= "AND (sm.datem BETWEEN '". $db->idate($startDate) ."' AND '". $db->idate($endDate) ."') ";
+			$sql .= "LEFT JOIN (";
+			$sql .= "SELECT sm.fk_product, sm.fk_entrepot, ";
+			$sql .= "SUM(CASE WHEN sm.value > 0 THEN sm.value ELSE 0 END) AS entrees, ";
+			$sql .= "SUM(CASE WHEN sm.value < 0 THEN -sm.value ELSE 0 END) AS sorties, ";
+			$sql .= "SUM(sm.value) AS period_value ";
+			$sql .= "FROM ".MAIN_DB_PREFIX."stock_mouvement AS sm ";
+			$sql .= "WHERE sm.datem BETWEEN '".$db->idate($startDate)."' AND '".$db->idate($endDate)."' ";
 			if ($caissierId!=-1){
-				$sql .= "AND sm.fk_user_author = ". (int) $caissierId;
-			}			
+				$sql .= "AND sm.fk_user_author = ". (int) $caissierId." ";
+			}
+			$sql .= "GROUP BY sm.fk_product, sm.fk_entrepot";
+			$sql .= ") AS pm ON pm.fk_product = p.rowid AND pm.fk_entrepot = ps.fk_entrepot ";
+			$sql .= "LEFT JOIN (";
+			$sql .= "SELECT sm.fk_product, sm.fk_entrepot, SUM(sm.value) AS after_value ";
+			$sql .= "FROM ".MAIN_DB_PREFIX."stock_mouvement AS sm ";
+			$sql .= "WHERE sm.datem > '".$db->idate($endDate)."' ";
+			$sql .= "GROUP BY sm.fk_product, sm.fk_entrepot";
+			$sql .= ") AS am ON am.fk_product = p.rowid AND am.fk_entrepot = ps.fk_entrepot ";
 			$sql .= " WHERE ps.fk_entrepot = ". (int) $entrepot;
 			$sql .= " AND p.entity = ".(int) $conf->entity;
 			$sql .= " AND e.entity IN (".getEntity('stock').")";
-			$sql .= " GROUP BY p.rowid, ps.reel";
+			$sql .= " GROUP BY p.rowid, p.ref, p.label, ps.reel, pm.entrees, pm.sorties, pm.period_value, am.after_value";
 			if (getDolGlobalInt('INVENTAIREPLUS_RESTRICT_STOCK_SHEET')) {
 				$sql .= " HAVING ".$entreesExpr." <> 0";
 				$sql .= " OR ".$sortiesExpr." <> 0";
-				$sql .= " OR ".$stockInitialExpr." <> ps.reel";
+				$sql .= " OR ".$stockInitialExpr." <> ".$stockFinalExpr;
 			}
 			$sql .= " ORDER BY p.label ASC, p.ref ASC";
 			$resql = $this->db->query($sql);
