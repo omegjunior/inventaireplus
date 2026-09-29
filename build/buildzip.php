@@ -43,6 +43,7 @@ $listOfModuleContent = [
 	'js',
 	'langs',
 	'lib',
+	'product',
 	'sql',
 	'tpl',
 	'*.md',
@@ -255,7 +256,7 @@ function zipDir($folder, &$zip, $root = "")
 			continue;
 		} //skip . ..
 		$src = $folder . '/' . $f;
-		$dst = substr($f->getPathname(), strlen($root));
+		$dst = str_replace('\\', '/', substr($f->getPathname(), strlen($root)));
 		if ($f->isDir()) {
 			if ($zip->addEmptyDir($dst)) {
 				if (zipDir($src, $zip, $root)) {
