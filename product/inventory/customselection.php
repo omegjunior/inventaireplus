@@ -84,7 +84,9 @@ if ($action === 'createfromselection') {
 			setEventMessages($langs->trans('InventoryPlusUnresolvedProducts', implode(', ', $selection['unresolved'])), null, 'warnings');
 		}
 		$categoryProductIds = inventaireplusResolveProductCategorySelection($db, $selectedCategoryIds, true);
-		$productIds = array_values(array_unique(array_merge($selectedProductIds, $categoryProductIds, $selection['ids'])));
+		// Textarea entries are deliberately first so their top-to-bottom order becomes
+		// the insertion order of native inventory lines.
+		$productIds = array_values(array_unique(array_merge($selection['ids'], $selectedProductIds, $categoryProductIds)));
 		if (empty($productIds)) {
 			$error++;
 			setEventMessages($langs->trans('InventoryPlusNoResolvedProduct'), null, 'errors');
@@ -96,7 +98,7 @@ if ($action === 'createfromselection') {
 			} else {
 				$inventoryId = inventaireplusCreateInventoryFromSelection($db, $user, $ref, $title, $warehouseId, $dateInventory, $lines);
 				if ($inventoryId > 0) {
-					header('Location: '.DOL_URL_ROOT.'/product/inventory/inventory.php?id='.$inventoryId);
+					header('Location: '.DOL_URL_ROOT.'/product/inventory/inventory.php?id='.$inventoryId.'&sortfield=id.rowid&sortorder=ASC');
 					exit;
 				}
 				setEventMessages($langs->trans('InventoryPlusCustomSelectionCreateFailed'), null, 'errors');

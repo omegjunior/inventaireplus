@@ -17,6 +17,7 @@ require_once DOL_DOCUMENT_ROOT.'/product/class/product.class.php';
 require_once DOL_DOCUMENT_ROOT.'/product/inventory/class/inventory.class.php';
 require_once DOL_DOCUMENT_ROOT.'/product/stock/class/mouvementstock.class.php';
 require_once DOL_DOCUMENT_ROOT.'/custom/inventaireplus/lib/inventoryselection.lib.php';
+require_once DOL_DOCUMENT_ROOT.'/custom/inventaireplus/lib/inventorycollaborative.lib.php';
 
 /**
  * Check rights for optimized inventory actions.
@@ -78,7 +79,6 @@ function inventaireplusAutofillLargeInventory($db, $user, $inventoryId)
 		$result['error'] = 'InventoryPlusOptimizedActionNeedsValidatedInventory';
 		return $result;
 	}
-
 	$sql = 'SELECT DISTINCT fk_warehouse, fk_product FROM '.MAIN_DB_PREFIX.'inventorydet WHERE fk_inventory = '.$inventoryId;
 	$resql = $db->query($sql);
 	if (!$resql) {
@@ -314,6 +314,11 @@ function inventaireplusRecordLargeInventory($db, $user, $inventoryId, $langs)
 	if (empty($inventoryData)) {
 		$db->rollback();
 		$result['error'] = 'InventoryPlusOptimizedActionNeedsValidatedInventory';
+		return $result;
+	}
+	if (inventaireplusHasOpenCollaborativeCount($db, $inventoryId)) {
+		$db->rollback();
+		$result['error'] = 'InventoryPlusCollaborativeMustConsolidateBeforeClose';
 		return $result;
 	}
 

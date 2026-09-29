@@ -97,9 +97,10 @@ function inventaireplusFetchInventoryDocumentContext($db, $inventoryId)
  * @param DoliDB $db Database handler
  * @param int    $inventoryId Inventory id
  * @param bool   $onlyDiscrepancies True to keep only lines with discrepancy
+ * @param bool   $preserveLineOrder Keep native inventory line insertion order
  * @return array<int,array<string,mixed>>
  */
-function inventaireplusFetchInventoryDocumentLines($db, $inventoryId, $onlyDiscrepancies = false)
+function inventaireplusFetchInventoryDocumentLines($db, $inventoryId, $onlyDiscrepancies = false, $preserveLineOrder = false)
 {
 	$inventoryId = (int) $inventoryId;
 	if ($inventoryId <= 0) {
@@ -166,26 +167,28 @@ function inventaireplusFetchInventoryDocumentLines($db, $inventoryId, $onlyDiscr
 		);
 	}
 
-	usort($lines, function ($lineA, $lineB) {
-		$categoryCompare = strcmp((string) $lineA['category_label'], (string) $lineB['category_label']);
-		if ($categoryCompare !== 0) {
-			return $categoryCompare;
-		}
-		$refCompare = strcmp((string) $lineA['product_ref'], (string) $lineB['product_ref']);
-		if ($refCompare !== 0) {
-			return $refCompare;
-		}
-		$labelCompare = strcmp((string) $lineA['product_label'], (string) $lineB['product_label']);
-		if ($labelCompare !== 0) {
-			return $labelCompare;
-		}
-		$batchCompare = strcmp((string) $lineA['batch'], (string) $lineB['batch']);
-		if ($batchCompare !== 0) {
-			return $batchCompare;
-		}
+	if (!$preserveLineOrder) {
+		usort($lines, function ($lineA, $lineB) {
+			$categoryCompare = strcmp((string) $lineA['category_label'], (string) $lineB['category_label']);
+			if ($categoryCompare !== 0) {
+				return $categoryCompare;
+			}
+			$refCompare = strcmp((string) $lineA['product_ref'], (string) $lineB['product_ref']);
+			if ($refCompare !== 0) {
+				return $refCompare;
+			}
+			$labelCompare = strcmp((string) $lineA['product_label'], (string) $lineB['product_label']);
+			if ($labelCompare !== 0) {
+				return $labelCompare;
+			}
+			$batchCompare = strcmp((string) $lineA['batch'], (string) $lineB['batch']);
+			if ($batchCompare !== 0) {
+				return $batchCompare;
+			}
 
-		return ((int) $lineA['rowid'] <=> (int) $lineB['rowid']);
-	});
+			return ((int) $lineA['rowid'] <=> (int) $lineB['rowid']);
+		});
+	}
 
 	return $lines;
 }
@@ -196,15 +199,17 @@ function inventaireplusFetchInventoryDocumentLines($db, $inventoryId, $onlyDiscr
  * @param DoliDB $db Database handler
  * @param int    $inventoryId Inventory id
  * @param bool   $onlyDiscrepancies True to keep only lines with discrepancy
+ * @param bool   $preserveLineOrder Keep native inventory line insertion order
  * @return array<string,mixed>
  */
-function inventaireplusBuildInventoryDocumentDataset($db, $inventoryId, $onlyDiscrepancies = false)
+function inventaireplusBuildInventoryDocumentDataset($db, $inventoryId, $onlyDiscrepancies = false, $preserveLineOrder = false)
 {
-	$lines = inventaireplusFetchInventoryDocumentLines($db, $inventoryId, $onlyDiscrepancies);
+	$lines = inventaireplusFetchInventoryDocumentLines($db, $inventoryId, $onlyDiscrepancies, $preserveLineOrder);
 	$dataset = array(
 		'context' => inventaireplusFetchInventoryDocumentContext($db, $inventoryId),
 		'lines' => $lines,
 		'categories' => array(),
+		'ordered_sections' => array(),
 		'line_count' => 0,
 		'has_discrepancies' => false,
 		'total_theoretical' => 0.0,
@@ -212,10 +217,21 @@ function inventaireplusBuildInventoryDocumentDataset($db, $inventoryId, $onlyDis
 		'total_delta' => 0.0,
 	);
 
+	$previousLeafKey = null;
 	foreach ($lines as $line) {
 		$categoryLabel = (!empty($line['category_label']) ? $line['category_label'] : 'Non classé');
 		$categoryNodes = inventaireplusGetCategoryPathNodes($db, (int) ($line['category_id'] ?? 0), $categoryLabel);
 		$leafKey = $categoryNodes[count($categoryNodes) - 1]['key'];
+		if ($leafKey !== $previousLeafKey) {
+			$dataset['ordered_sections'][] = array(
+				'key' => $leafKey,
+				'nodes' => $categoryNodes,
+				'lines' => array(),
+			);
+			$previousLeafKey = $leafKey;
+		}
+		$sectionIndex = count($dataset['ordered_sections']) - 1;
+		$dataset['ordered_sections'][$sectionIndex]['lines'][] = $line;
 		foreach ($categoryNodes as $node) {
 			if (!isset($dataset['categories'][$node['key']])) {
 				$dataset['categories'][$node['key']] = array(

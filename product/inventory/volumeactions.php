@@ -24,6 +24,7 @@ if (!$res) {
 require_once DOL_DOCUMENT_ROOT.'/core/class/html.form.class.php';
 require_once DOL_DOCUMENT_ROOT.'/product/inventory/class/inventory.class.php';
 require_once DOL_DOCUMENT_ROOT.'/custom/inventaireplus/lib/inventoryvolume.lib.php';
+require_once DOL_DOCUMENT_ROOT.'/custom/inventaireplus/lib/inventorycollaborative.lib.php';
 
 /**
  * @var Conf $conf
@@ -88,6 +89,11 @@ if ($action === 'optimized_autofill' || $action === 'optimized_record') {
 			$errorMessage = !empty($result['error']) ? $langs->trans($result['error']) : '';
 			setEventMessages($langs->trans('InventoryPlusOptimizedAutofillFailed').($errorMessage ? ' : '.$errorMessage : ''), null, 'errors');
 		}
+		header('Location: '.$backUrl);
+		exit;
+	}
+	if (inventaireplusHasOpenCollaborativeCount($db, (int) $object->id)) {
+		setEventMessages($langs->trans('InventoryPlusCollaborativeMustConsolidateBeforeClose'), null, 'errors');
 		header('Location: '.$backUrl);
 		exit;
 	}

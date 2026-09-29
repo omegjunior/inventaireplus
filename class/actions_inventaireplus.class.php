@@ -174,6 +174,17 @@ class ActionsInventairePlus extends CommonHookActions
 		global $langs, $user;
 		if (!$this->hasHookContext($parameters, $hookmanager, 'inventorycard')) return 0;
 		$langs->loadLangs(array('stocks', 'inventaireplus@inventaireplus'));
+		if (in_array($action, array('record', 'update'), true) && !empty($object->id)) {
+			require_once DOL_DOCUMENT_ROOT.'/custom/inventaireplus/lib/inventorycollaborative.lib.php';
+			$closingAllowed = ($action === 'update')
+				? inventaireplusReserveInventoryForClosing($this->db, (int) $object->id, $user)
+				: !inventaireplusHasOpenCollaborativeCount($this->db, (int) $object->id);
+			if (!$closingAllowed) {
+				setEventMessages($langs->trans('InventoryPlusCollaborativeMustConsolidateBeforeClose'), null, 'errors');
+				$action = '';
+				return -1;
+			}
+		}
 
 		$managedActions = array('buildcountsheetinventaireplus', 'builddiscrepanciespdfinventaireplus', 'buildinventoryminutesinventaireplus');
 		if (!in_array($action, $managedActions, true)) return 0;
@@ -667,9 +678,15 @@ class ActionsInventairePlus extends CommonHookActions
 		}
 		if (!$this->hasHookContext($parameters, $hookmanager, 'inventorycard')) return 0;
 		if (empty($object) || !is_object($object) || empty($object->id) || empty($object->element) || $object->element !== 'inventory') return 0;
-		if (!($user->hasRight('stock', 'inventory_advance', 'write') || $user->hasRight('stock', 'creer'))) return 0;
 
 		$status = isset($object->status) ? (int) $object->status : -1;
+		$canReadInventory = ($user->hasRight('stock', 'lire') || $user->hasRight('stock', 'inventory_advance', 'read') || $user->hasRight('stock', 'inventory_advance', 'write'));
+		if ($status === (int) $object::STATUS_VALIDATED && $canReadInventory && ($user->hasRight('inventaireplus', 'collaborativecount', 'write') || $user->hasRight('inventaireplus', 'collaborativecount', 'consolidate'))) {
+			$collaborativeUrl = dol_buildpath('/custom/inventaireplus/product/inventory/collaborativecount.php', 1).'?id='.(int) $object->id;
+			print '<a class="butAction" href="'.$collaborativeUrl.'">'.$langs->trans('InventoryPlusCollaborativeCount').'</a>';
+		}
+		if (!($user->hasRight('stock', 'inventory_advance', 'write') || $user->hasRight('stock', 'creer'))) return 0;
+
 		$currentPage = $_SERVER['PHP_SELF'];
 		$hideDoliCsvhDuplicates = $this->shouldHideDoliCsvhDuplicateActions();
 		if ($status === (int) $object::STATUS_VALIDATED) {

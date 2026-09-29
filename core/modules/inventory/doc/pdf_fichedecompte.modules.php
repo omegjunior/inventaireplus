@@ -146,7 +146,7 @@ class pdf_fichedecompte extends ModelePDFFactures
 			return 0;
 		}
 
-		$dataset = inventaireplusBuildInventoryDocumentDataset($this->db, $inventoryId, false);
+		$dataset = inventaireplusBuildInventoryDocumentDataset($this->db, $inventoryId, false, true);
 		if (empty($dataset['lines'])) {
 			$this->error = 'Aucune ligne d\'inventaire n\'est disponible pour la fiche de décompte.';
 			return 0;
@@ -185,20 +185,22 @@ class pdf_fichedecompte extends ModelePDFFactures
 		$categoryRowHeight = 7;
 		$signatureReserve = 28;
 
-		foreach ($dataset['categories'] as $category) {
-			if ($y + $categoryRowHeight + 8 > ($this->page_hauteur - $this->marge_basse - $signatureReserve)) {
-				$this->_pagefoot($pdf, $outputlangs);
-				$pdf->AddPage('P');
-				$y = $this->renderTableHeader($pdf, $this->marge_haute, $defaultFontSize);
+		foreach ($dataset['ordered_sections'] as $section) {
+			foreach ($section['nodes'] as $categoryNode) {
+				if ($y + $categoryRowHeight + 8 > ($this->page_hauteur - $this->marge_basse - $signatureReserve)) {
+					$this->_pagefoot($pdf, $outputlangs);
+					$pdf->AddPage('P');
+					$y = $this->renderTableHeader($pdf, $this->marge_haute, $defaultFontSize);
+				}
+
+				$pdf->SetFont('', 'B', $defaultFontSize - 1);
+				$pdf->SetXY($this->marge_gauche, $y);
+				$categoryLabel = str_repeat('   ', (int) ($categoryNode['level'] ?? 0)).$categoryNode['label'];
+				$pdf->MultiCell($this->getTableWidth(), $categoryRowHeight, $outputlangs->convToOutputCharset($categoryLabel), 1, ((int) ($categoryNode['level'] ?? 0) > 0 ? 'L' : 'C'), false, 1, '', '', true, 0, false, true, 7, 'M', true);
+				$y += $categoryRowHeight;
 			}
 
-			$pdf->SetFont('', 'B', $defaultFontSize - 1);
-			$pdf->SetXY($this->marge_gauche, $y);
-			$categoryLabel = str_repeat('   ', (int) ($category['level'] ?? 0)).$category['label'];
-			$pdf->MultiCell($this->getTableWidth(), $categoryRowHeight, $outputlangs->convToOutputCharset($categoryLabel), 1, ((int) ($category['level'] ?? 0) > 0 ? 'L' : 'C'), false, 1, '', '', true, 0, false, true, 7, 'M', true);
-			$y += $categoryRowHeight;
-
-			foreach ($category['lines'] as $line) {
+			foreach ($section['lines'] as $line) {
 				$rowHeight = $this->getRowHeight($pdf, $line, $defaultFontSize);
 				if ($y + $rowHeight > ($this->page_hauteur - $this->marge_basse - $signatureReserve)) {
 					$this->_pagefoot($pdf, $outputlangs);

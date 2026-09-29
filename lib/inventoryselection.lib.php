@@ -79,22 +79,36 @@ function inventaireplusResolveProductSelection($db, array $tokens)
 	}
 	$sql .= " AND (".implode(' OR ', $conditions).")";
 
-	$foundTokens = array();
+	$productsById = array();
+	$productsByRef = array();
+	$productsByBarcode = array();
 	$resql = $db->query($sql);
 	if ($resql) {
 		while ($obj = $db->fetch_object($resql)) {
-			$result['ids'][(int) $obj->rowid] = (int) $obj->rowid;
-			$foundTokens[(string) $obj->rowid] = true;
-			$foundTokens[(string) $obj->ref] = true;
+			$productId = (int) $obj->rowid;
+			$productsById[(string) $productId] = $productId;
+			$productsByRef[(string) $obj->ref] = $productId;
 			if (!empty($obj->barcode)) {
-				$foundTokens[(string) $obj->barcode] = true;
+				$productsByBarcode[(string) $obj->barcode] = $productId;
 			}
 		}
 		$db->free($resql);
 	}
 
+	$selectedIds = array();
 	foreach ($tokens as $token) {
-		if (empty($foundTokens[$token])) {
+		$productId = 0;
+		if (isset($productsById[$token])) {
+			$productId = $productsById[$token];
+		} elseif (isset($productsByRef[$token])) {
+			$productId = $productsByRef[$token];
+		} elseif (isset($productsByBarcode[$token])) {
+			$productId = $productsByBarcode[$token];
+		}
+		if ($productId > 0 && empty($selectedIds[$productId])) {
+			$result['ids'][] = $productId;
+			$selectedIds[$productId] = true;
+		} elseif ($productId <= 0) {
 			$result['unresolved'][] = $token;
 		}
 	}
@@ -258,8 +272,13 @@ function inventaireplusFetchSelectedInventoryLines($db, array $productIds, $ware
 	if (empty($productIds) || (int) $warehouseId <= 0) {
 		return array();
 	}
+	$orderCases = array();
+	foreach ($productIds as $position => $productId) {
+		$orderCases[] = 'WHEN '.((int) $productId).' THEN '.((int) $position);
+	}
+	$productOrderSql = 'CASE p.rowid '.implode(' ', $orderCases).' ELSE '.count($productIds).' END';
 
-	$lines = array();
+	$linesByProduct = array();
 	if (isModEnabled('productbatch')) {
 		$sql = "SELECT p.rowid AS fk_product, p.ref, p.tobatch, ps.fk_entrepot AS fk_warehouse, ps.reel, pb.batch, pb.qty";
 		$sql .= " FROM ".MAIN_DB_PREFIX."product AS p";
@@ -267,11 +286,13 @@ function inventaireplusFetchSelectedInventoryLines($db, array $productIds, $ware
 		$sql .= " INNER JOIN ".MAIN_DB_PREFIX."product_batch AS pb ON pb.fk_product_stock = ps.rowid";
 		$sql .= " WHERE p.rowid IN (".implode(',', $productIds).")";
 		$sql .= " AND COALESCE(p.tobatch, 0) > 0";
-		$sql .= " ORDER BY p.ref ASC, pb.batch ASC";
+		$sql .= " ORDER BY ".$productOrderSql.", pb.batch ASC";
 		$resql = $db->query($sql);
 		if ($resql) {
 			while ($obj = $db->fetch_object($resql)) {
-				$lines[] = array(
+				$productId = (int) $obj->fk_product;
+				if (!isset($linesByProduct[$productId])) $linesByProduct[$productId] = array();
+				$linesByProduct[$productId][] = array(
 					'fk_warehouse' => (int) $obj->fk_warehouse,
 					'fk_product' => (int) $obj->fk_product,
 					'batch' => (string) $obj->batch,
@@ -289,12 +310,14 @@ function inventaireplusFetchSelectedInventoryLines($db, array $productIds, $ware
 	if (isModEnabled('productbatch')) {
 		$sql .= " AND COALESCE(p.tobatch, 0) = 0";
 	}
-	$sql .= " ORDER BY p.ref ASC";
+	$sql .= " ORDER BY ".$productOrderSql;
 
 	$resql = $db->query($sql);
 	if ($resql) {
 		while ($obj = $db->fetch_object($resql)) {
-			$lines[] = array(
+			$productId = (int) $obj->fk_product;
+			if (!isset($linesByProduct[$productId])) $linesByProduct[$productId] = array();
+			$linesByProduct[$productId][] = array(
 				'fk_warehouse' => (int) $warehouseId,
 				'fk_product' => (int) $obj->fk_product,
 				'batch' => '',
@@ -304,6 +327,12 @@ function inventaireplusFetchSelectedInventoryLines($db, array $productIds, $ware
 		$db->free($resql);
 	}
 
+	$lines = array();
+	foreach ($productIds as $productId) {
+		if (!empty($linesByProduct[$productId])) {
+			foreach ($linesByProduct[$productId] as $line) $lines[] = $line;
+		}
+	}
 	return $lines;
 }
 

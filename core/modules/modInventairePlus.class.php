@@ -328,6 +328,16 @@ class modInventairePlus extends DolibarrModules
 		$this->rights[$r][4] = 'largeinventory';
 		$this->rights[$r][5] = 'write';
 		$r++;
+		$this->rights[$r][0] = $this->numero.sprintf("%02d", $r + 1);
+		$this->rights[$r][1] = 'Saisir des contributions de comptage collaboratif';
+		$this->rights[$r][4] = 'collaborativecount';
+		$this->rights[$r][5] = 'write';
+		$r++;
+		$this->rights[$r][0] = $this->numero.sprintf("%02d", $r + 1);
+		$this->rights[$r][1] = 'Consolider un comptage collaboratif dans un inventaire';
+		$this->rights[$r][4] = 'collaborativecount';
+		$this->rights[$r][5] = 'consolidate';
+		$r++;
 		/* BEGIN MODULEBUILDER PERMISSIONS */
 		/*
 		$o = 1;
