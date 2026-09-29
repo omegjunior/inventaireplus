@@ -193,6 +193,8 @@ function inventaireplusAddCountContribution($db, $user, $inventoryId, $token, $b
 	if (!is_finite($qty) || $qty <= 0 || $qty > 1000000000000) return array('ok' => false, 'error' => 'InventoryPlusCollaborativePositiveQtyRequired');
 	if ($scanKey === '' || strlen($scanKey) > 64) return array('ok' => false, 'error' => 'InventoryPlusCollaborativeInvalidScanKey');
 
+	// Resolve migration availability before opening the stock transaction.
+	inventaireplusControlStorageAvailable($db);
 	$db->begin();
 	$resql = $db->query('SELECT rowid, status FROM '.MAIN_DB_PREFIX.'inventory WHERE rowid = '.((int) $inventoryId).' AND entity = '.((int) getEntity('inventory')).' FOR UPDATE');
 	$inventory = ($resql ? $db->fetch_object($resql) : null);
@@ -237,6 +239,10 @@ function inventaireplusAddCountContribution($db, $user, $inventoryId, $token, $b
 		$db->rollback();
 		return array('ok' => false, 'error' => 'InventoryPlusCollaborativeDatabaseError');
 	}
+	if (!inventaireplusInvalidateControlReports($db, (int) $session->rowid)) {
+		$db->rollback();
+		return array('ok' => false, 'error' => 'InventoryPlusCollaborativeDatabaseError');
+	}
 	$db->commit();
 	return array('ok' => true, 'line' => $line);
 }
@@ -253,18 +259,35 @@ function inventaireplusAddCountContribution($db, $user, $inventoryId, $token, $b
  */
 function inventaireplusVoidCountContribution($db, $user, $inventoryId, $contributionId, $canManage)
 {
+	// Resolve migration availability before opening the stock transaction.
+	inventaireplusControlStorageAvailable($db);
 	$db->begin();
-	$sql = 'SELECT c.rowid, c.fk_user_author, c.active, s.status FROM '.MAIN_DB_PREFIX.'inventaireplus_count_contribution AS c';
-	$sql .= ' INNER JOIN '.MAIN_DB_PREFIX.'inventaireplus_count_session AS s ON s.rowid = c.fk_session';
-	$sql .= ' WHERE c.rowid = '.((int) $contributionId).' AND c.fk_inventory = '.((int) $inventoryId).' FOR UPDATE';
+	$resql = $db->query('SELECT rowid, status FROM '.MAIN_DB_PREFIX.'inventory WHERE rowid = '.((int) $inventoryId).' AND entity = '.((int) getEntity('inventory')).' FOR UPDATE');
+	$inventory = ($resql ? $db->fetch_object($resql) : null);
+	if (!$inventory || (int) $inventory->status !== Inventory::STATUS_VALIDATED) {
+		$db->rollback();
+		return false;
+	}
+	$resql = $db->query('SELECT rowid, status FROM '.MAIN_DB_PREFIX.'inventaireplus_count_session WHERE entity = '.((int) getEntity('inventory')).' AND fk_inventory = '.((int) $inventoryId).' FOR UPDATE');
+	$session = ($resql ? $db->fetch_object($resql) : null);
+	if (!$session || (int) $session->status !== 0) {
+		$db->rollback();
+		return false;
+	}
+	$sql = 'SELECT rowid, fk_session, fk_user_author, active FROM '.MAIN_DB_PREFIX.'inventaireplus_count_contribution';
+	$sql .= ' WHERE rowid = '.((int) $contributionId).' AND fk_inventory = '.((int) $inventoryId).' AND fk_session = '.((int) $session->rowid).' FOR UPDATE';
 	$resql = $db->query($sql);
 	$row = ($resql ? $db->fetch_object($resql) : null);
-	if (!$row || (int) $row->status !== 0 || !(int) $row->active || (!$canManage && (int) $row->fk_user_author !== (int) $user->id)) {
+	if (!$row || !(int) $row->active || (!$canManage && (int) $row->fk_user_author !== (int) $user->id)) {
 		$db->rollback();
 		return false;
 	}
 	$sql = 'UPDATE '.MAIN_DB_PREFIX.'inventaireplus_count_contribution SET active = 0, date_void = \''.$db->idate(dol_now()).'\', fk_user_void = '.((int) $user->id).' WHERE rowid = '.((int) $contributionId).' AND active = 1';
 	if (!$db->query($sql)) {
+		$db->rollback();
+		return false;
+	}
+	if (!inventaireplusInvalidateControlReports($db, (int) $row->fk_session)) {
 		$db->rollback();
 		return false;
 	}
@@ -282,6 +305,9 @@ function inventaireplusVoidCountContribution($db, $user, $inventoryId, $contribu
  */
 function inventaireplusConsolidateCollaborativeCount($db, $user, $inventoryId)
 {
+	if (empty($user->admin) && !inventaireplusControlStorageAvailable($db)) {
+		return array('ok' => false, 'error' => 'InventoryPlusCollaborativeControlStorageMissing');
+	}
 	$db->begin();
 	$resql = $db->query('SELECT rowid, status FROM '.MAIN_DB_PREFIX.'inventory WHERE rowid = '.((int) $inventoryId).' AND entity = '.((int) getEntity('inventory')).' FOR UPDATE');
 	$inventory = ($resql ? $db->fetch_object($resql) : null);
@@ -294,6 +320,13 @@ function inventaireplusConsolidateCollaborativeCount($db, $user, $inventoryId)
 	if (!$session || (int) $session->status !== 0) {
 		$db->rollback();
 		return array('ok' => false, 'error' => 'InventoryPlusCollaborativeCampaignClosed');
+	}
+	if (empty($user->admin)) {
+		$controlCheck = inventaireplusCheckApprovedControl($db, $inventoryId, (int) $session->rowid);
+		if (empty($controlCheck['ok'])) {
+			$db->rollback();
+			return $controlCheck;
+		}
 	}
 
 	$totals = array();
@@ -366,4 +399,320 @@ function inventaireplusFetchRecentContributions($db, $sessionId, $limit = 50)
 	$resql = $db->query($sql);
 	if ($resql) while ($obj = $db->fetch_object($resql)) $rows[] = $obj;
 	return $rows;
+}
+
+/**
+ * Check whether the control-sheet migration has been installed.
+ *
+ * @param DoliDB $db Database handler
+ * @return bool
+ */
+function inventaireplusControlStorageAvailable($db)
+{
+	static $available = null;
+	if ($available === null) {
+		$resql = $db->DDLDescTable(MAIN_DB_PREFIX.'inventaireplus_count_control');
+		$available = ($resql && $db->num_rows($resql) > 0);
+	}
+	return $available;
+}
+
+/**
+ * Invalidate generated or approved control sheets after a contribution change.
+ *
+ * @param DoliDB $db Database handler
+ * @param int $sessionId Session id
+ * @return bool
+ */
+function inventaireplusInvalidateControlReports($db, $sessionId)
+{
+	// Keep collaborative counting operational while a newly deployed module is awaiting reactivation.
+	if (!inventaireplusControlStorageAvailable($db)) return true;
+	$sql = 'UPDATE '.MAIN_DB_PREFIX.'inventaireplus_count_control SET status = 2';
+	$sql .= ' WHERE fk_session = '.((int) $sessionId).' AND status IN (0, 1)';
+	return (bool) $db->query($sql);
+}
+
+/**
+ * Build the immutable data represented by a collaborative control sheet.
+ *
+ * @param DoliDB $db Database handler
+ * @param int $inventoryId Inventory id
+ * @param int $sessionId Session id
+ * @return array<string,mixed>|null
+ */
+function inventaireplusBuildControlDataset($db, $inventoryId, $sessionId)
+{
+	$sql = 'SELECT i.rowid, i.ref, i.title, i.status, i.fk_warehouse, e.ref AS warehouse_ref';
+	$sql .= ' FROM '.MAIN_DB_PREFIX.'inventory AS i';
+	$sql .= ' LEFT JOIN '.MAIN_DB_PREFIX.'entrepot AS e ON e.rowid = i.fk_warehouse';
+	$sql .= ' WHERE i.rowid = '.((int) $inventoryId).' AND i.entity = '.((int) getEntity('inventory'));
+	$resql = $db->query($sql);
+	$context = ($resql ? $db->fetch_object($resql) : null);
+	if (!$context) return null;
+
+	$rows = array();
+	$zones = array();
+	$canonical = array();
+	$maxId = 0;
+	$sql = 'SELECT c.rowid, c.fk_inventorydet, c.fk_product, c.fk_warehouse, c.batch, c.zone, c.qty, c.datec, c.fk_user_author,';
+	$sql .= ' p.ref AS product_ref, p.label AS product_label, u.login, u.firstname, u.lastname';
+	$sql .= ' FROM '.MAIN_DB_PREFIX.'inventaireplus_count_contribution AS c';
+	$sql .= ' INNER JOIN '.MAIN_DB_PREFIX.'product AS p ON p.rowid = c.fk_product';
+	$sql .= ' LEFT JOIN '.MAIN_DB_PREFIX.'user AS u ON u.rowid = c.fk_user_author';
+	$sql .= ' WHERE c.fk_session = '.((int) $sessionId).' AND c.fk_inventory = '.((int) $inventoryId).' AND c.active = 1';
+	$sql .= ' ORDER BY c.rowid ASC';
+	$resql = $db->query($sql);
+	if (!$resql) return null;
+	while ($obj = $db->fetch_object($resql)) {
+		$row = array(
+			'rowid' => (int) $obj->rowid,
+			'fk_inventorydet' => (int) $obj->fk_inventorydet,
+			'fk_product' => (int) $obj->fk_product,
+			'fk_warehouse' => (int) $obj->fk_warehouse,
+			'batch' => (string) $obj->batch,
+			'zone' => (string) $obj->zone,
+			'qty' => (float) price2num($obj->qty, 'MS'),
+			'datec' => (string) $obj->datec,
+			'fk_user_author' => (int) $obj->fk_user_author,
+			'product_ref' => (string) $obj->product_ref,
+			'product_label' => (string) $obj->product_label,
+			'user_login' => (string) $obj->login,
+			'user_name' => trim((string) $obj->firstname.' '.(string) $obj->lastname),
+		);
+		$rows[] = $row;
+		$zoneKey = $row['zone'];
+		if (!isset($zones[$zoneKey])) {
+			$zones[$zoneKey] = array('label' => $row['zone'], 'lines' => array(), 'total' => 0.0);
+		}
+		$zones[$zoneKey]['lines'][] = $row;
+		$zones[$zoneKey]['total'] += $row['qty'];
+		$maxId = max($maxId, $row['rowid']);
+		$canonical[] = array(
+			'id' => $row['rowid'],
+			'line' => $row['fk_inventorydet'],
+			'product' => $row['fk_product'],
+			'warehouse' => $row['fk_warehouse'],
+			'batch' => $row['batch'],
+			'zone' => $row['zone'],
+			'qty' => number_format($row['qty'], 8, '.', ''),
+			'date' => $row['datec'],
+			'user' => $row['fk_user_author'],
+			'ref' => $row['product_ref'],
+			'label' => $row['product_label'],
+		);
+	}
+	$db->free($resql);
+
+	$contextData = array(
+		'inventory_id' => (int) $context->rowid,
+		'inventory_ref' => (string) $context->ref,
+		'inventory_title' => (string) $context->title,
+		'inventory_status' => (int) $context->status,
+		'warehouse_id' => (int) $context->fk_warehouse,
+		'warehouse_ref' => (string) $context->warehouse_ref,
+		'warehouse_label' => (string) $context->warehouse_ref,
+	);
+	$encodedSnapshot = json_encode(array('context' => $contextData, 'lines' => $canonical), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+	if ($encodedSnapshot === false) return null;
+
+	return array(
+		'context' => $contextData,
+		'lines' => $rows,
+		'zones' => array_values($zones),
+		'contribution_count' => count($rows),
+		'contribution_max_id' => $maxId,
+		'content_hash' => hash('sha256', $encodedSnapshot),
+	);
+}
+
+/**
+ * Fetch the latest control report of a session.
+ *
+ * @param DoliDB $db Database handler
+ * @param int $sessionId Session id
+ * @return object|null
+ */
+function inventaireplusFetchLatestControlReport($db, $sessionId)
+{
+	if (!inventaireplusControlStorageAvailable($db)) return null;
+	$sql = 'SELECT c.*, ua.login AS author_login, uv.login AS approval_login';
+	$sql .= ' FROM '.MAIN_DB_PREFIX.'inventaireplus_count_control AS c';
+	$sql .= ' LEFT JOIN '.MAIN_DB_PREFIX.'user AS ua ON ua.rowid = c.fk_user_author';
+	$sql .= ' LEFT JOIN '.MAIN_DB_PREFIX.'user AS uv ON uv.rowid = c.fk_user_approval';
+	$sql .= ' WHERE c.fk_session = '.((int) $sessionId).' ORDER BY c.sequence DESC';
+	$sql .= $db->plimit(1, 0);
+	$resql = $db->query($sql);
+	return ($resql ? $db->fetch_object($resql) : null);
+}
+
+/**
+ * Generate and register a four-eyes control PDF under a session lock.
+ *
+ * @param DoliDB $db Database handler
+ * @param User $user Current user
+ * @param int $inventoryId Inventory id
+ * @param Translate $langs Output language
+ * @return array<string,mixed>
+ */
+function inventaireplusCreateControlReport($db, $user, $inventoryId, $langs)
+{
+	global $conf;
+	if (!inventaireplusControlStorageAvailable($db)) {
+		return array('ok' => false, 'error' => 'InventoryPlusCollaborativeControlStorageMissing');
+	}
+	$result = array('ok' => false, 'error' => 'InventoryPlusCollaborativeDatabaseError');
+	$db->begin();
+	$resql = $db->query('SELECT rowid, status FROM '.MAIN_DB_PREFIX.'inventory WHERE rowid = '.((int) $inventoryId).' AND entity = '.((int) getEntity('inventory')).' FOR UPDATE');
+	$inventory = ($resql ? $db->fetch_object($resql) : null);
+	if (!$inventory || (int) $inventory->status !== Inventory::STATUS_VALIDATED) {
+		$db->rollback();
+		return array('ok' => false, 'error' => 'InventoryPlusCollaborativeInventoryNotOpen');
+	}
+	$resql = $db->query('SELECT rowid, status FROM '.MAIN_DB_PREFIX.'inventaireplus_count_session WHERE entity = '.((int) getEntity('inventory')).' AND fk_inventory = '.((int) $inventoryId).' FOR UPDATE');
+	$session = ($resql ? $db->fetch_object($resql) : null);
+	if (!$session || (int) $session->status !== 0) {
+		$db->rollback();
+		return array('ok' => false, 'error' => 'InventoryPlusCollaborativeCampaignClosed');
+	}
+	$dataset = inventaireplusBuildControlDataset($db, $inventoryId, (int) $session->rowid);
+	if (!$dataset || empty($dataset['lines'])) {
+		$db->rollback();
+		return array('ok' => false, 'error' => 'InventoryPlusCollaborativeNoContributionForControl');
+	}
+	$resql = $db->query('SELECT COALESCE(MAX(sequence), 0) + 1 AS next_sequence FROM '.MAIN_DB_PREFIX.'inventaireplus_count_control WHERE fk_session = '.((int) $session->rowid));
+	if (!$resql) {
+		$db->rollback();
+		return $result;
+	}
+	$sequenceRow = ($resql ? $db->fetch_object($resql) : null);
+	$sequence = ($sequenceRow ? (int) $sequenceRow->next_sequence : 1);
+	if (!inventaireplusInvalidateControlReports($db, (int) $session->rowid)) {
+		$db->rollback();
+		return $result;
+	}
+
+	$stockDirOutput = (!empty($conf->stock->multidir_output[$conf->entity]) ? $conf->stock->multidir_output[$conf->entity] : $conf->stock->dir_output);
+	$inventoryRefSafe = ((int) $dataset['context']['inventory_id']).'_'.dol_sanitizeFileName(dol_trunc($dataset['context']['inventory_ref'], 64, 'right', 'UTF-8', 1));
+	$dirOutput = $stockDirOutput.'/movement/inventaireplus/control/'.$inventoryRefSafe;
+	try {
+		require_once DOL_DOCUMENT_ROOT.'/custom/inventaireplus/core/modules/inventory/doc/pdf_controlecontributions.modules.php';
+		$pdfModel = new pdf_controlecontributions($db);
+		$pdfResult = $pdfModel->write_file(array('dataset' => $dataset, 'sequence' => $sequence, 'diroutput' => $dirOutput), $langs);
+	} catch (Throwable $e) {
+		$db->rollback();
+		dol_syslog(__FUNCTION__.' PDF generation failed: '.$e->getMessage(), LOG_ERR);
+		return array('ok' => false, 'error' => 'InventoryPlusCollaborativeControlPdfFailed');
+	}
+	if ($pdfResult <= 0 || empty($pdfModel->result['fullpath']) || empty($pdfModel->result['relativefile'])) {
+		$db->rollback();
+		return array('ok' => false, 'error' => 'InventoryPlusCollaborativeControlPdfFailed');
+	}
+
+	$sql = 'INSERT INTO '.MAIN_DB_PREFIX.'inventaireplus_count_control';
+	$sql .= ' (entity, fk_session, sequence, contribution_max_id, contribution_count, content_hash, file_path, status, datec, fk_user_author) VALUES (';
+	$sql .= ((int) getEntity('inventory')).', '.((int) $session->rowid).', '.$sequence.', '.((int) $dataset['contribution_max_id']).', '.((int) $dataset['contribution_count']).', ';
+	$sql .= '\''.$db->escape($dataset['content_hash']).'\', \''.$db->escape($pdfModel->result['relativefile']).'\', 0, \''.$db->idate(dol_now()).'\', '.((int) $user->id).')';
+	if (!$db->query($sql)) {
+		$db->rollback();
+		@unlink($pdfModel->result['fullpath']);
+		return $result;
+	}
+	$reportId = (int) $db->last_insert_id(MAIN_DB_PREFIX.'inventaireplus_count_control');
+	$db->commit();
+	return array('ok' => true, 'report_id' => $reportId, 'relativefile' => $pdfModel->result['relativefile'], 'content_hash' => $dataset['content_hash']);
+}
+
+/**
+ * Approve a control report after ensuring it still represents current data.
+ *
+ * @param DoliDB $db Database handler
+ * @param User $user Current user
+ * @param int $inventoryId Inventory id
+ * @param int $reportId Report id
+ * @return array<string,mixed>
+ */
+function inventaireplusApproveControlReport($db, $user, $inventoryId, $reportId)
+{
+	if (!inventaireplusControlStorageAvailable($db)) {
+		return array('ok' => false, 'error' => 'InventoryPlusCollaborativeControlStorageMissing');
+	}
+	$db->begin();
+	$resql = $db->query('SELECT rowid, status FROM '.MAIN_DB_PREFIX.'inventory WHERE rowid = '.((int) $inventoryId).' AND entity = '.((int) getEntity('inventory')).' FOR UPDATE');
+	$inventory = ($resql ? $db->fetch_object($resql) : null);
+	if (!$inventory || (int) $inventory->status !== Inventory::STATUS_VALIDATED) {
+		$db->rollback();
+		return array('ok' => false, 'error' => 'InventoryPlusCollaborativeInventoryNotOpen');
+	}
+	$resql = $db->query('SELECT rowid, status FROM '.MAIN_DB_PREFIX.'inventaireplus_count_session WHERE entity = '.((int) getEntity('inventory')).' AND fk_inventory = '.((int) $inventoryId).' FOR UPDATE');
+	$session = ($resql ? $db->fetch_object($resql) : null);
+	if (!$session || (int) $session->status !== 0) {
+		$db->rollback();
+		return array('ok' => false, 'error' => 'InventoryPlusCollaborativeCampaignClosed');
+	}
+	$sql = 'SELECT * FROM '.MAIN_DB_PREFIX.'inventaireplus_count_control';
+	$sql .= ' WHERE rowid = '.((int) $reportId).' AND fk_session = '.((int) $session->rowid).' FOR UPDATE';
+	$resql = $db->query($sql);
+	$report = ($resql ? $db->fetch_object($resql) : null);
+	if (!$report || (int) $report->status !== 0) {
+		$db->rollback();
+		return array('ok' => false, 'error' => 'InventoryPlusCollaborativeControlObsolete');
+	}
+	$resql = $db->query('SELECT COUNT(rowid) AS nb FROM '.MAIN_DB_PREFIX.'inventaireplus_count_contribution WHERE fk_session = '.((int) $report->fk_session).' AND fk_user_author = '.((int) $user->id));
+	if (!$resql) {
+		$db->rollback();
+		return array('ok' => false, 'error' => 'InventoryPlusCollaborativeDatabaseError');
+	}
+	$contributor = ($resql ? $db->fetch_object($resql) : null);
+	if ($contributor && (int) $contributor->nb > 0) {
+		$db->rollback();
+		return array('ok' => false, 'error' => 'InventoryPlusCollaborativeControlReviewerContributed');
+	}
+	$dataset = inventaireplusBuildControlDataset($db, $inventoryId, (int) $report->fk_session);
+	if (!$dataset || $dataset['content_hash'] !== (string) $report->content_hash || (int) $dataset['contribution_count'] !== (int) $report->contribution_count || (int) $dataset['contribution_max_id'] !== (int) $report->contribution_max_id) {
+		$db->query('UPDATE '.MAIN_DB_PREFIX.'inventaireplus_count_control SET status = 2 WHERE rowid = '.((int) $reportId));
+		$db->commit();
+		return array('ok' => false, 'error' => 'InventoryPlusCollaborativeControlObsolete');
+	}
+	$sql = 'UPDATE '.MAIN_DB_PREFIX.'inventaireplus_count_control SET status = 1, date_approval = \''.$db->idate(dol_now()).'\', fk_user_approval = '.((int) $user->id).' WHERE rowid = '.((int) $reportId).' AND status = 0';
+	if (!$db->query($sql)) {
+		$db->rollback();
+		return array('ok' => false, 'error' => 'InventoryPlusCollaborativeDatabaseError');
+	}
+	$db->commit();
+	return array('ok' => true);
+}
+
+/**
+ * Check the approved four-eyes snapshot while inventory/session locks are held.
+ *
+ * @param DoliDB $db Database handler
+ * @param int $inventoryId Inventory id
+ * @param int $sessionId Session id
+ * @return array<string,mixed>
+ */
+function inventaireplusCheckApprovedControl($db, $inventoryId, $sessionId)
+{
+	if (!inventaireplusControlStorageAvailable($db)) {
+		return array('ok' => false, 'error' => 'InventoryPlusCollaborativeControlStorageMissing');
+	}
+	$sql = 'SELECT * FROM '.MAIN_DB_PREFIX.'inventaireplus_count_control';
+	$sql .= ' WHERE fk_session = '.((int) $sessionId).' AND status = 1 ORDER BY sequence DESC';
+	$sql .= $db->plimit(1, 0);
+	$resql = $db->query($sql);
+	$report = ($resql ? $db->fetch_object($resql) : null);
+	if (!$report || empty($report->fk_user_approval)) {
+		return array('ok' => false, 'error' => 'InventoryPlusCollaborativeControlRequired');
+	}
+	$resql = $db->query('SELECT COUNT(rowid) AS nb FROM '.MAIN_DB_PREFIX.'inventaireplus_count_contribution WHERE fk_session = '.((int) $sessionId).' AND fk_user_author = '.((int) $report->fk_user_approval));
+	$contributor = ($resql ? $db->fetch_object($resql) : null);
+	if (!$resql || ($contributor && (int) $contributor->nb > 0)) {
+		return array('ok' => false, 'error' => 'InventoryPlusCollaborativeControlReviewerContributed');
+	}
+	$dataset = inventaireplusBuildControlDataset($db, $inventoryId, $sessionId);
+	if (!$dataset || $dataset['content_hash'] !== (string) $report->content_hash || (int) $dataset['contribution_count'] !== (int) $report->contribution_count || (int) $dataset['contribution_max_id'] !== (int) $report->contribution_max_id) {
+		$db->query('UPDATE '.MAIN_DB_PREFIX.'inventaireplus_count_control SET status = 2 WHERE rowid = '.((int) $report->rowid));
+		return array('ok' => false, 'error' => 'InventoryPlusCollaborativeControlObsolete');
+	}
+	return array('ok' => true, 'report' => $report);
 }

@@ -32,10 +32,12 @@ if ($user->socid > 0) accessforbidden();
 $inventoryId = GETPOSTINT('id');
 $action = GETPOST('action', 'aZ09');
 $confirm = GETPOST('confirm', 'alpha');
-$canReadInventory = ($user->hasRight('stock', 'lire') || $user->hasRight('stock', 'inventory_advance', 'read') || $user->hasRight('stock', 'inventory_advance', 'write'));
+$isAdmin = !empty($user->admin);
+$canReadInventory = ($isAdmin || $user->hasRight('stock', 'lire') || $user->hasRight('stock', 'inventory_advance', 'read') || $user->hasRight('stock', 'inventory_advance', 'write'));
 $canCount = $canReadInventory && $user->hasRight('inventaireplus', 'collaborativecount', 'write');
-$canConsolidate = $canReadInventory && $user->hasRight('inventaireplus', 'collaborativecount', 'consolidate') && ($user->hasRight('stock', 'inventory_advance', 'write') || $user->hasRight('stock', 'mouvement', 'creer') || $user->hasRight('stock', 'creer'));
-if (!$canCount && !$canConsolidate) accessforbidden();
+$canConsolidate = ($isAdmin || ($canReadInventory && $user->hasRight('inventaireplus', 'collaborativecount', 'consolidate') && ($user->hasRight('stock', 'inventory_advance', 'write') || $user->hasRight('stock', 'mouvement', 'creer') || $user->hasRight('stock', 'creer'))));
+$canControl = ($isAdmin || ($canReadInventory && $user->hasRight('inventaireplus', 'collaborativecount', 'control')));
+if (!$canCount && !$canConsolidate && !$canControl) accessforbidden();
 
 $object = new Inventory($db);
 if ($inventoryId <= 0 || $object->fetch($inventoryId) <= 0) accessforbidden();
@@ -82,19 +84,47 @@ if ($action === 'consolidate' && $confirm === 'yes' && $canConsolidate) {
 	setEventMessages($langs->trans($result['error']), null, 'errors');
 }
 
+if ($action === 'buildcontrolpdf' && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && ($canCount || $canConsolidate || $canControl)) {
+	$result = inventaireplusCreateControlReport($db, $user, $inventoryId, $langs);
+	if (!empty($result['ok'])) {
+		setEventMessages($langs->trans('InventoryPlusCollaborativeControlGenerated'), null, 'mesgs');
+		header('Location: '.DOL_URL_ROOT.'/document.php?modulepart=movement&file='.urlencode($result['relativefile']));
+		exit;
+	}
+	setEventMessages($langs->trans($result['error']), null, 'errors');
+}
+
+if ($action === 'approvecontrol' && $confirm === 'yes' && $canControl) {
+	$result = inventaireplusApproveControlReport($db, $user, $inventoryId, GETPOSTINT('control_id'));
+	if (!empty($result['ok'])) {
+		setEventMessages($langs->trans('InventoryPlusCollaborativeControlApproved'), null, 'mesgs');
+	} else {
+		setEventMessages($langs->trans($result['error']), null, 'errors');
+	}
+	header('Location: '.$_SERVER['PHP_SELF'].'?id='.$inventoryId);
+	exit;
+}
+
 $session = inventaireplusFetchCountSession($db, $inventoryId);
 $sessionStatus = ($session ? (int) $session->status : 0);
 $totals = ($session ? inventaireplusFetchCollaborativeTotals($db, (int) $session->rowid) : array());
 $contributions = ($session ? inventaireplusFetchRecentContributions($db, (int) $session->rowid) : array());
+$controlStorageAvailable = inventaireplusControlStorageAvailable($db);
+$controlReport = ($session && $controlStorageAvailable ? inventaireplusFetchLatestControlReport($db, (int) $session->rowid) : null);
 $campaignOpen = ($sessionStatus === 0 && (int) $object->status === Inventory::STATUS_VALIDATED);
+$controlReady = ($isAdmin || ($controlReport && (int) $controlReport->status === 1));
 $scanKey = bin2hex(random_bytes(16));
 $form = new Form($db);
 $formConfirm = '';
 if ($action === 'confirm_consolidate' && $canConsolidate && $campaignOpen) {
+	$confirmConsolidation = $langs->trans('InventoryPlusCollaborativeConfirmConsolidate');
+	if ($isAdmin && (!$controlReport || (int) $controlReport->status !== 1)) {
+		$confirmConsolidation .= '<br><br><strong>'.$langs->trans('InventoryPlusCollaborativeAdminConsolidation').'</strong>';
+	}
 	$formConfirm = $form->formconfirm(
 		$_SERVER['PHP_SELF'].'?id='.$inventoryId,
 		$langs->trans('InventoryPlusCollaborativeConsolidate'),
-		$langs->trans('InventoryPlusCollaborativeConfirmConsolidate'),
+		$confirmConsolidation,
 		'consolidate',
 		'',
 		0,
@@ -120,6 +150,16 @@ if ($action === 'confirm_consolidate' && $canConsolidate && $campaignOpen) {
 			1
 		);
 	}
+} elseif ($action === 'confirm_approvecontrol' && $canControl && $campaignOpen && $controlReport && (int) $controlReport->status === 0 && GETPOSTINT('control_id') === (int) $controlReport->rowid) {
+	$formConfirm = $form->formconfirm(
+		$_SERVER['PHP_SELF'].'?id='.$inventoryId.'&control_id='.((int) $controlReport->rowid),
+		$langs->trans('InventoryPlusCollaborativeControlApprove'),
+		$langs->trans('InventoryPlusCollaborativeControlApproveConfirm'),
+		'approvecontrol',
+		'',
+		0,
+		1
+	);
 }
 
 /*
@@ -191,9 +231,53 @@ foreach ($contributions as $row) {
 }
 print '</table></div>';
 
+print '<br>'.load_fiche_titre($langs->trans('InventoryPlusCollaborativeControl'), '', 'pdf');
+print '<div class="info">'.$langs->trans('InventoryPlusCollaborativeControlHelp').'</div>';
+if (!$controlStorageAvailable) {
+	print '<div class="warning">'.$langs->trans('InventoryPlusCollaborativeControlStorageMissing').'</div>';
+}
+print '<div class="div-table-responsive">';
+print '<table class="noborder centpercent">';
+print '<tr class="liste_titre"><th>'.$langs->trans('InventoryPlusCollaborativeControlSequenceLabel').'</th><th>'.$langs->trans('Date').'</th><th>'.$langs->trans('Author').'</th><th class="right">'.$langs->trans('InventoryPlusCollaborativeScans').'</th><th>'.$langs->trans('InventoryPlusCollaborativeControlHash').'</th><th>'.$langs->trans('Status').'</th><th>'.$langs->trans('InventoryPlusCollaborativeController').'</th><th></th></tr>';
+if (!$controlReport) {
+	print '<tr><td colspan="8" class="opacitymedium">'.$langs->trans('None').'</td></tr>';
+} else {
+	$statusLabel = 'InventoryPlusCollaborativeControlGeneratedStatus';
+	$statusClass = 'badge-status4';
+	if ((int) $controlReport->status === 1) {
+		$statusLabel = 'InventoryPlusCollaborativeControlApprovedStatus';
+		$statusClass = 'badge-status6';
+	} elseif ((int) $controlReport->status === 2) {
+		$statusLabel = 'InventoryPlusCollaborativeControlObsoleteStatus';
+		$statusClass = 'badge-status8';
+	}
+	$documentUrl = DOL_URL_ROOT.'/document.php?modulepart=movement&file='.urlencode($controlReport->file_path);
+	$controller = (!empty($controlReport->approval_login) ? dol_escape_htmltag($controlReport->approval_login).' - '.dol_print_date($db->jdate($controlReport->date_approval), 'dayhour') : '');
+	print '<tr class="oddeven"><td>'.((int) $controlReport->sequence).'</td><td>'.dol_print_date($db->jdate($controlReport->datec), 'dayhour').'</td><td>'.dol_escape_htmltag($controlReport->author_login).'</td><td class="right">'.((int) $controlReport->contribution_count).'</td><td><span class="small">'.dol_escape_htmltag(substr($controlReport->content_hash, 0, 16)).'...</span></td><td><span class="badge '.$statusClass.'">'.$langs->trans($statusLabel).'</span></td><td>'.$controller.'</td><td class="right"><a class="reposition" href="'.dol_escape_htmltag($documentUrl).'" target="_blank" rel="noopener">'.img_picto($langs->trans('Download'), 'pdf').'</a></td></tr>';
+}
+print '</table></div>';
+
+if ($campaignOpen && $controlStorageAvailable && ($canCount || $canConsolidate || $canControl)) {
+	print '<div class="tabsAction">';
+	print '<form class="inline-block" method="POST" action="'.dol_escape_htmltag($_SERVER['PHP_SELF']).'">';
+	print '<input type="hidden" name="token" value="'.newToken().'">';
+	print '<input type="hidden" name="action" value="buildcontrolpdf">';
+	print '<input type="hidden" name="id" value="'.$inventoryId.'">';
+	print '<button class="butAction" type="submit">'.$langs->trans('InventoryPlusCollaborativeGenerateControl').'</button>';
+	print '</form>';
+	if ($canControl && $controlReport && (int) $controlReport->status === 0) {
+		print '<a class="butAction" href="'.$_SERVER['PHP_SELF'].'?id='.$inventoryId.'&action=confirm_approvecontrol&control_id='.((int) $controlReport->rowid).'&token='.newToken().'">'.$langs->trans('InventoryPlusCollaborativeControlApprove').'</a>';
+	}
+	print '</div>';
+}
+
 if ($canConsolidate && $campaignOpen) {
 	print '<div class="tabsAction">';
-	print '<a class="butAction" href="'.$_SERVER['PHP_SELF'].'?id='.$inventoryId.'&action=confirm_consolidate&token='.newToken().'">'.$langs->trans('InventoryPlusCollaborativeConsolidate').'</a>';
+	if ($controlReady) {
+		print '<a class="butAction" href="'.$_SERVER['PHP_SELF'].'?id='.$inventoryId.'&action=confirm_consolidate&token='.newToken().'">'.$langs->trans('InventoryPlusCollaborativeConsolidate').'</a>';
+	} else {
+		print '<span class="butActionRefused classfortooltip" title="'.dol_escape_htmltag($langs->trans('InventoryPlusCollaborativeControlRequired')).'">'.$langs->trans('InventoryPlusCollaborativeConsolidate').'</span>';
+	}
 	print '</div>';
 }
 
