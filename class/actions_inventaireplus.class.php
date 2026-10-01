@@ -428,9 +428,29 @@ class ActionsInventairePlus extends CommonHookActions
 
 	public function selectProductsListWhere($parameters, &$object, &$action, $hookmanager)
 	{
+		if (!empty($parameters['currentcontext']) && $parameters['currentcontext'] === 'inventaireplusproductsearch') {
+			$inventoryId = GETPOSTINT('inventoryid');
+			if ($inventoryId > 0) {
+				$this->resprints = ' AND EXISTS (SELECT 1 FROM '.MAIN_DB_PREFIX.'inventorydet ipid WHERE ipid.fk_inventory = '.((int) $inventoryId).' AND ipid.fk_product = p.rowid)';
+			}
+			return 0;
+		}
+
 		if (empty($parameters['currentcontext']) || !in_array($parameters['currentcontext'], array('massstockmoveinventaireplus', 'stockmovementlistInventairePlus'), true)) return 0;
 		$warehouseId = ($parameters['currentcontext'] == 'massstockmoveinventaireplus') ? GETPOSTINT('id_sw') : GETPOSTINT('id');
 		if ($warehouseId > 0) $this->resprints = ' AND EXISTS (SELECT 1 FROM '.MAIN_DB_PREFIX.'product_stock psw WHERE psw.fk_product = p.rowid AND psw.fk_entrepot = '.((int) $warehouseId).')';
+		return 0;
+	}
+
+	public function selectProductsListSelect($parameters, &$object, &$action, $hookmanager)
+	{
+		if (empty($parameters['currentcontext']) || $parameters['currentcontext'] !== 'inventaireplusproductsearch') return 0;
+
+		$warehouseId = GETPOSTINT('warehouseid');
+		if ($warehouseId > 0) {
+			$this->resprints = ', COALESCE((SELECT ips.reel FROM '.MAIN_DB_PREFIX.'product_stock ips WHERE ips.fk_product = p.rowid AND ips.fk_entrepot = '.((int) $warehouseId).' LIMIT 1), 0) AS stock';
+		}
+
 		return 0;
 	}
 

@@ -192,7 +192,13 @@ if ($campaignOpen && $canCount) {
 	if (isModEnabled('productbatch')) {
 		print '<tr><td>'.$langs->trans('Batch').'</td><td><input class="flat minwidth300" name="batch" value="'.dol_escape_htmltag(GETPOST('batch', 'restricthtml')).'" maxlength="128" autocomplete="off"></td></tr>';
 	}
-	print '<tr><td class="fieldrequired">'.$langs->trans('Product').'</td><td><input class="flat minwidth300" id="inventaireplus-product-token" name="product_token" value="'.dol_escape_htmltag(GETPOST('product_token', 'alphanohtml')).'" maxlength="255" autocomplete="off" required> <span class="opacitymedium">'.$langs->trans('InventoryPlusCollaborativeProductHelp').'</span></td></tr>';
+	$warehouseId = (int) $object->fk_warehouse;
+	$productSelector = $form->select_produits(GETPOSTINT('product_token'), 'product_token', '0', 0, 0, -1, 2, '', 0, array(), 0, '1', 0, 'minwidth300 maxwidth300', 1, '', null, 1, -1, $warehouseId);
+	$nativeProductAjaxUrl = DOL_URL_ROOT.'/product/ajax/products.php';
+	$inventoryPlusProductAjaxUrl = dol_buildpath('/inventaireplus/ajax/products.php', 1);
+	$productSelector = str_replace($nativeProductAjaxUrl, $inventoryPlusProductAjaxUrl, $productSelector);
+	$productSelector = str_replace('warehouseid='.$warehouseId, 'warehouseid='.$warehouseId.'&inventoryid='.$inventoryId, $productSelector);
+	print '<tr><td class="fieldrequired">'.$langs->trans('Product').'</td><td>'.$productSelector.' <span class="opacitymedium">'.$langs->trans('InventoryPlusCollaborativeProductHelp').'</span></td></tr>';
 	print '</table>';
 	print dol_get_fiche_end();
 	print '<div class="center"><input class="button button-save" type="submit" value="'.$langs->trans('InventoryPlusCollaborativeAddContribution').'"></div>';
@@ -286,7 +292,9 @@ jQuery(function() {
 	var form = jQuery("#inventaireplus-count-form");
 	var zone = jQuery("#inventaireplus-zone");
 	var qty = jQuery("#inventaireplus-qty");
-	var product = jQuery("#inventaireplus-product-token");
+	var product = jQuery("#product_token");
+	var productSearch = jQuery("#search_product_token");
+	var productControl = productSearch.length ? productSearch : product;
 	if (!form.length) return;
 
 	var storageSuffix = "_'.((int) $inventoryId).'_'.((int) $user->id).'";
@@ -304,35 +312,76 @@ jQuery(function() {
 		window.localStorage.setItem(qtyStorageKey, qty.val());
 	});
 
-	product.on("keydown", function(event) {
-		if (event.key !== "Enter" && event.which !== 13) return;
-		event.preventDefault();
+	function validateAndSubmitContribution() {
 		if (!zone[0].checkValidity()) {
 			zone[0].reportValidity();
 			zone.trigger("focus");
-			return;
+			return false;
 		}
 		var numericQty = Number(qty.val().replace(/\\s/g, "").replace(",", "."));
 		if (!qty.val().trim() || !Number.isFinite(numericQty) || numericQty <= 0) {
 			qty[0].setCustomValidity("'.dol_escape_js($langs->trans('InventoryPlusCollaborativePositiveQtyRequired')).'");
 			qty[0].reportValidity();
 			qty.trigger("focus");
-			return;
+			return false;
 		}
-		if (!product[0].checkValidity()) {
-			product[0].reportValidity();
-			return;
+		if (!product.val()) {
+			if (productControl.length && productControl[0].setCustomValidity) {
+				productControl[0].setCustomValidity("'.dol_escape_js($langs->trans('InventoryPlusCollaborativeProductRequired')).'");
+				productControl[0].reportValidity();
+				productControl.trigger("focus");
+			}
+			return false;
 		}
 		if (form[0].requestSubmit) {
 			form[0].requestSubmit();
 		} else {
 			form[0].submit();
 		}
+		return true;
+	}
+
+	productControl.on("input change", function() {
+		if (this.setCustomValidity) this.setCustomValidity("");
 	});
+	form.on("submit", function(event) {
+		if (product.val()) return;
+		event.preventDefault();
+		if (productControl.length && productControl[0].setCustomValidity) {
+			productControl[0].setCustomValidity("'.dol_escape_js($langs->trans('InventoryPlusCollaborativeProductRequired')).'");
+			productControl[0].reportValidity();
+			productControl.trigger("focus");
+		}
+	});
+
+	if (productSearch.length) {
+		var scannerSubmitPending = false;
+		productSearch[0].addEventListener("keydown", function(event) {
+			if (event.key !== "Enter" && event.keyCode !== 13) return;
+			if (scannerSubmitPending) return;
+			scannerSubmitPending = true;
+			var attempts = 0;
+			var submitAfterNativeSelection = function() {
+				if (product.val()) {
+					scannerSubmitPending = false;
+					validateAndSubmitContribution();
+					return;
+				}
+				attempts++;
+				if (attempts < 15) {
+					window.setTimeout(submitAfterNativeSelection, 100);
+				} else {
+					scannerSubmitPending = false;
+					validateAndSubmitContribution();
+				}
+			};
+			window.setTimeout(submitAfterNativeSelection, 50);
+		}, true);
+	}
 
 	if (!zone.val()) zone.trigger("focus");
 	else if (!qty.val()) qty.trigger("focus");
-	else product.trigger("focus");
+	else productControl.trigger("focus");
 });
 </script>';
 
