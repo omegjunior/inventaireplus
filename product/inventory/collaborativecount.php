@@ -320,14 +320,14 @@ jQuery(function() {
 		}
 		var numericQty = Number(qty.val().replace(/\\s/g, "").replace(",", "."));
 		if (!qty.val().trim() || !Number.isFinite(numericQty) || numericQty <= 0) {
-			qty[0].setCustomValidity("'.dol_escape_js($langs->trans('InventoryPlusCollaborativePositiveQtyRequired')).'");
+			qty[0].setCustomValidity("'.dol_escape_js($langs->transnoentities('InventoryPlusCollaborativePositiveQtyRequired')).'");
 			qty[0].reportValidity();
 			qty.trigger("focus");
 			return false;
 		}
 		if (!product.val()) {
 			if (productControl.length && productControl[0].setCustomValidity) {
-				productControl[0].setCustomValidity("'.dol_escape_js($langs->trans('InventoryPlusCollaborativeProductRequired')).'");
+				productControl[0].setCustomValidity("'.dol_escape_js($langs->transnoentities('InventoryPlusCollaborativeProductRequired')).'");
 				productControl[0].reportValidity();
 				productControl.trigger("focus");
 			}
@@ -348,7 +348,7 @@ jQuery(function() {
 		if (product.val()) return;
 		event.preventDefault();
 		if (productControl.length && productControl[0].setCustomValidity) {
-			productControl[0].setCustomValidity("'.dol_escape_js($langs->trans('InventoryPlusCollaborativeProductRequired')).'");
+			productControl[0].setCustomValidity("'.dol_escape_js($langs->transnoentities('InventoryPlusCollaborativeProductRequired')).'");
 			productControl[0].reportValidity();
 			productControl.trigger("focus");
 		}
