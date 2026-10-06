@@ -363,9 +363,11 @@ function inventaireplusConsolidateCollaborativeCount($db, $user, $inventoryId)
  *
  * @param DoliDB $db Database handler
  * @param int $sessionId Session id
+ * @param int $limit Maximum rows, 0 for no limit
+ * @param int $offset First row offset
  * @return array<int,object>
  */
-function inventaireplusFetchCollaborativeTotals($db, $sessionId)
+function inventaireplusFetchCollaborativeTotals($db, $sessionId, $limit = 0, $offset = 0)
 {
 	$rows = array();
 	$sql = 'SELECT c.fk_inventorydet, c.fk_product, c.batch, p.ref, p.label, id.qty_stock, SUM(c.qty) AS counted_qty, COUNT(c.rowid) AS contribution_count';
@@ -374,9 +376,28 @@ function inventaireplusFetchCollaborativeTotals($db, $sessionId)
 	$sql .= ' INNER JOIN '.MAIN_DB_PREFIX.'inventorydet AS id ON id.rowid = c.fk_inventorydet';
 	$sql .= ' WHERE c.fk_session = '.((int) $sessionId).' AND c.active = 1';
 	$sql .= ' GROUP BY c.fk_inventorydet, c.fk_product, c.batch, p.ref, p.label, id.qty_stock ORDER BY p.ref ASC, c.batch ASC';
+	if ($limit > 0) $sql .= $db->plimit(max(1, (int) $limit), max(0, (int) $offset));
 	$resql = $db->query($sql);
 	if ($resql) while ($obj = $db->fetch_object($resql)) $rows[] = $obj;
 	return $rows;
+}
+
+/**
+ * Count collaborative totals grouped by native inventory line.
+ *
+ * @param DoliDB $db Database handler
+ * @param int $sessionId Session id
+ * @return int
+ */
+function inventaireplusCountCollaborativeTotals($db, $sessionId)
+{
+	$sql = 'SELECT COUNT(DISTINCT c.fk_inventorydet) AS nb';
+	$sql .= ' FROM '.MAIN_DB_PREFIX.'inventaireplus_count_contribution AS c';
+	$sql .= ' WHERE c.fk_session = '.((int) $sessionId).' AND c.active = 1';
+	$resql = $db->query($sql);
+	if (!$resql) return 0;
+	$obj = $db->fetch_object($resql);
+	return ($obj ? (int) $obj->nb : 0);
 }
 
 /**
