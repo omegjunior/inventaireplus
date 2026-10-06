@@ -1,5 +1,16 @@
 # CHANGELOG MODULE INVENTAIREPLUS FOR [DOLIBARR ERP CRM](https://www.dolibarr.org)
 
+## 1.3.0 - 2026-10-06
+
+- Add a paginated and filterable second-count entry workflow based on an immutable first-count snapshot.
+- Protect verified quantities with atomic saves, optimistic locking and truncated-request detection.
+- Generate first-count control and quantity-free second-count sheets together in PDF and XLSX formats.
+- Generate separate verified second-count results with quantities, discrepancies and verifier traceability.
+- Preserve four-eyes approval separation while allowing contributors to enter second-count quantities.
+- Require a current verified result before non-administrator consolidation.
+- Add second-count verification and report storage tables with their database constraints.
+- Prevent long warehouse descriptions from overlapping dates in inventory minutes and discrepancy PDFs.
+
 ## 1.2.0 - 2026-10-06
 
 - Split collaborative counting and four-eyes control into native Dolibarr tabs.
