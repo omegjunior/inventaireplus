@@ -365,17 +365,22 @@ function inventaireplusConsolidateCollaborativeCount($db, $user, $inventoryId)
  * @param int $sessionId Session id
  * @param int $limit Maximum rows, 0 for no limit
  * @param int $offset First row offset
+ * @param array<string,mixed> $filters List filters
  * @return array<int,object>
  */
-function inventaireplusFetchCollaborativeTotals($db, $sessionId, $limit = 0, $offset = 0)
+function inventaireplusFetchCollaborativeTotals($db, $sessionId, $limit = 0, $offset = 0, $filters = array())
 {
 	$rows = array();
 	$sql = 'SELECT c.fk_inventorydet, c.fk_product, c.batch, p.ref, p.label, id.qty_stock, SUM(c.qty) AS counted_qty, COUNT(c.rowid) AS contribution_count';
 	$sql .= ' FROM '.MAIN_DB_PREFIX.'inventaireplus_count_contribution AS c';
-	$sql .= ' INNER JOIN '.MAIN_DB_PREFIX.'product AS p ON p.rowid = c.fk_product';
-	$sql .= ' INNER JOIN '.MAIN_DB_PREFIX.'inventorydet AS id ON id.rowid = c.fk_inventorydet';
+	$sql .= ' LEFT JOIN '.MAIN_DB_PREFIX.'product AS p ON p.rowid = c.fk_product';
+	$sql .= ' LEFT JOIN '.MAIN_DB_PREFIX.'inventorydet AS id ON id.rowid = c.fk_inventorydet';
 	$sql .= ' WHERE c.fk_session = '.((int) $sessionId).' AND c.active = 1';
-	$sql .= ' GROUP BY c.fk_inventorydet, c.fk_product, c.batch, p.ref, p.label, id.qty_stock ORDER BY p.ref ASC, c.batch ASC';
+	$filterSql = inventaireplusBuildCollaborativeTotalsFilterSql($filters);
+	$sql .= $filterSql['where'];
+	$sql .= ' GROUP BY c.fk_inventorydet, c.fk_product, c.batch, p.ref, p.label, id.qty_stock';
+	$sql .= $filterSql['having'];
+	$sql .= ' ORDER BY p.ref ASC, c.batch ASC, c.fk_inventorydet ASC';
 	if ($limit > 0) $sql .= $db->plimit(max(1, (int) $limit), max(0, (int) $offset));
 	$resql = $db->query($sql);
 	if ($resql) while ($obj = $db->fetch_object($resql)) $rows[] = $obj;
@@ -387,13 +392,22 @@ function inventaireplusFetchCollaborativeTotals($db, $sessionId, $limit = 0, $of
  *
  * @param DoliDB $db Database handler
  * @param int $sessionId Session id
+ * @param array<string,mixed> $filters List filters
  * @return int
  */
-function inventaireplusCountCollaborativeTotals($db, $sessionId)
+function inventaireplusCountCollaborativeTotals($db, $sessionId, $filters = array())
 {
-	$sql = 'SELECT COUNT(DISTINCT c.fk_inventorydet) AS nb';
+	$sql = 'SELECT COUNT(*) AS nb FROM (';
+	$sql .= 'SELECT c.fk_inventorydet';
 	$sql .= ' FROM '.MAIN_DB_PREFIX.'inventaireplus_count_contribution AS c';
+	$sql .= ' LEFT JOIN '.MAIN_DB_PREFIX.'product AS p ON p.rowid = c.fk_product';
+	$sql .= ' LEFT JOIN '.MAIN_DB_PREFIX.'inventorydet AS id ON id.rowid = c.fk_inventorydet';
 	$sql .= ' WHERE c.fk_session = '.((int) $sessionId).' AND c.active = 1';
+	$filterSql = inventaireplusBuildCollaborativeTotalsFilterSql($filters);
+	$sql .= $filterSql['where'];
+	$sql .= ' GROUP BY c.fk_inventorydet, c.fk_product, c.batch, p.ref, p.label, id.qty_stock';
+	$sql .= $filterSql['having'];
+	$sql .= ') AS filtered_totals';
 	$resql = $db->query($sql);
 	if (!$resql) return 0;
 	$obj = $db->fetch_object($resql);
@@ -401,25 +415,185 @@ function inventaireplusCountCollaborativeTotals($db, $sessionId)
 }
 
 /**
- * Fetch the latest contribution entries for audit and correction.
+ * Build WHERE and HAVING clauses shared by collaborative totals queries.
+ *
+ * @param array<string,mixed> $filters List filters
+ * @return array{where:string,having:string}
+ */
+function inventaireplusBuildCollaborativeTotalsFilterSql($filters)
+{
+	$where = '';
+	$having = '';
+	if (!empty($filters['ref'])) $where .= natural_search('p.ref', $filters['ref']);
+	if (!empty($filters['label'])) $where .= natural_search('p.label', $filters['label']);
+	if (!empty($filters['batch'])) $where .= natural_search('c.batch', $filters['batch']);
+	if ((string) ($filters['theoretical'] ?? '') !== '') $where .= natural_search('id.qty_stock', $filters['theoretical'], 1);
+	if ((string) ($filters['scans'] ?? '') !== '') $having .= inventaireplusBuildNumericFilterSql('COUNT(c.rowid)', $filters['scans']);
+	if ((string) ($filters['physical'] ?? '') !== '') $having .= inventaireplusBuildNumericFilterSql('SUM(c.qty)', $filters['physical']);
+	if ((string) ($filters['delta'] ?? '') !== '') $having .= inventaireplusBuildNumericFilterSql('(SUM(c.qty) - id.qty_stock)', $filters['delta']);
+	return array('where' => $where, 'having' => ($having !== '' ? ' HAVING 1 = 1'.$having : ''));
+}
+
+/**
+ * Build a strict numeric SQL condition for an aggregate expression.
+ *
+ * @param string $expression Trusted SQL expression defined by the module
+ * @param mixed $value User numeric criterion, optionally prefixed by a comparison operator
+ * @return string
+ */
+function inventaireplusBuildNumericFilterSql($expression, $value)
+{
+	$value = preg_replace('/\s+/', '', trim((string) $value));
+	if (!preg_match('/^(<=|>=|<>|!=|=|<|>)?(-?[0-9]+(?:[\.,][0-9]+)?)$/', $value, $matches)) return ' AND 1 = 2';
+	$operator = !empty($matches[1]) ? $matches[1] : '=';
+	$numericValue = price2num($matches[2]);
+	if (!is_numeric($numericValue)) return ' AND 1 = 2';
+	return ' AND '.$expression.' '.$operator.' '.((float) $numericValue);
+}
+
+/**
+ * Count all contribution entries, including canceled entries kept for audit.
  *
  * @param DoliDB $db Database handler
  * @param int $sessionId Session id
- * @param int $limit Maximum rows
+ * @param array<string,mixed> $filters List filters
+ * @return int
+ */
+function inventaireplusCountContributions($db, $sessionId, $filters = array())
+{
+	$sql = 'SELECT COUNT(c.rowid) AS nb';
+	$sql .= ' FROM '.MAIN_DB_PREFIX.'inventaireplus_count_contribution AS c';
+	$sql .= ' LEFT JOIN '.MAIN_DB_PREFIX.'product AS p ON p.rowid = c.fk_product';
+	$sql .= ' LEFT JOIN '.MAIN_DB_PREFIX.'user AS u ON u.rowid = c.fk_user_author';
+	$sql .= ' WHERE c.fk_session = '.((int) $sessionId);
+	$sql .= inventaireplusBuildContributionsFilterSql($db, $filters);
+	$resql = $db->query($sql);
+	if (!$resql) return 0;
+	$obj = $db->fetch_object($resql);
+	return ($obj ? (int) $obj->nb : 0);
+}
+
+/**
+ * Fetch contribution entries for audit and correction, newest first.
+ *
+ * @param DoliDB $db Database handler
+ * @param int $sessionId Session id
+ * @param int $limit Maximum rows, 0 for no limit
+ * @param int $offset First row offset
+ * @param array<string,mixed> $filters List filters
  * @return array<int,object>
  */
-function inventaireplusFetchRecentContributions($db, $sessionId, $limit = 50)
+function inventaireplusFetchRecentContributions($db, $sessionId, $limit = 50, $offset = 0, $filters = array())
 {
 	$rows = array();
 	$sql = 'SELECT c.rowid, c.fk_user_author, c.batch, c.zone, c.qty, c.active, c.datec, p.ref, p.label, u.login';
 	$sql .= ' FROM '.MAIN_DB_PREFIX.'inventaireplus_count_contribution AS c';
-	$sql .= ' INNER JOIN '.MAIN_DB_PREFIX.'product AS p ON p.rowid = c.fk_product';
+	$sql .= ' LEFT JOIN '.MAIN_DB_PREFIX.'product AS p ON p.rowid = c.fk_product';
 	$sql .= ' LEFT JOIN '.MAIN_DB_PREFIX.'user AS u ON u.rowid = c.fk_user_author';
-	$sql .= ' WHERE c.fk_session = '.((int) $sessionId).' ORDER BY c.rowid DESC';
-	$sql .= $db->plimit(max(1, min(200, (int) $limit)), 0);
+	$sql .= ' WHERE c.fk_session = '.((int) $sessionId);
+	$sql .= inventaireplusBuildContributionsFilterSql($db, $filters);
+	$sql .= ' ORDER BY c.rowid DESC';
+	if ($limit > 0) $sql .= $db->plimit(max(1, (int) $limit), max(0, (int) $offset));
 	$resql = $db->query($sql);
 	if ($resql) while ($obj = $db->fetch_object($resql)) $rows[] = $obj;
 	return $rows;
+}
+
+/**
+ * Build the WHERE clause shared by contribution count and fetch queries.
+ *
+ * @param DoliDB $db Database handler
+ * @param array<string,mixed> $filters List filters
+ * @return string
+ */
+function inventaireplusBuildContributionsFilterSql($db, $filters)
+{
+	$sql = '';
+	if (!empty($filters['date_start'])) $sql .= " AND c.datec >= '".$db->idate((int) $filters['date_start'])."'";
+	if (!empty($filters['date_end'])) $sql .= " AND c.datec <= '".$db->idate((int) $filters['date_end'])."'";
+	if (!empty($filters['user'])) $sql .= natural_search(array('u.login', 'u.firstname', 'u.lastname'), $filters['user']);
+	if (!empty($filters['zone'])) $sql .= natural_search('c.zone', $filters['zone']);
+	if (!empty($filters['product'])) $sql .= natural_search(array('p.ref', 'p.label', 'p.barcode'), $filters['product']);
+	if (!empty($filters['batch'])) $sql .= natural_search('c.batch', $filters['batch']);
+	if ((string) ($filters['qty'] ?? '') !== '') $sql .= natural_search('c.qty', $filters['qty'], 1);
+	return $sql;
+}
+
+/**
+ * Fetch one contribution belonging to a collaborative session.
+ *
+ * @param DoliDB $db Database handler
+ * @param int $sessionId Session id
+ * @param int $contributionId Contribution id
+ * @return object|null
+ */
+function inventaireplusFetchContribution($db, $sessionId, $contributionId)
+{
+	$sql = 'SELECT c.rowid, c.fk_user_author, c.batch, c.zone, c.qty, c.active, c.datec, p.ref, p.label, u.login';
+	$sql .= ' FROM '.MAIN_DB_PREFIX.'inventaireplus_count_contribution AS c';
+	$sql .= ' LEFT JOIN '.MAIN_DB_PREFIX.'product AS p ON p.rowid = c.fk_product';
+	$sql .= ' LEFT JOIN '.MAIN_DB_PREFIX.'user AS u ON u.rowid = c.fk_user_author';
+	$sql .= ' WHERE c.rowid = '.((int) $contributionId).' AND c.fk_session = '.((int) $sessionId);
+	$resql = $db->query($sql);
+	return ($resql ? $db->fetch_object($resql) : null);
+}
+
+/**
+ * Build pagination controls using Dolibarr list styles with dedicated parameter names.
+ *
+ * Native print_barre_liste() always uses "page" and "limit", so it cannot render two
+ * independent pagers on the same page.
+ *
+ * @param string $baseUrl Page URL
+ * @param array<string,int|string> $parameters Parameters preserved in navigation links
+ * @param string $pageParameter Page parameter name
+ * @param string $limitParameter Limit parameter name
+ * @param int $page Current zero-based page
+ * @param int $limit Number of rows per page
+ * @param int $total Total number of rows
+ * @return string
+ */
+function inventaireplusBuildListPager($baseUrl, $parameters, $pageParameter, $limitParameter, $page, $limit, $total)
+{
+	global $conf, $langs;
+
+	$page = max(0, (int) $page);
+	$limit = max(1, (int) $limit);
+	$total = max(0, (int) $total);
+	$pageCount = max(1, (int) ceil($total / $limit));
+	$pagesizechoices = getDolGlobalString('MAIN_PAGESIZE_CHOICES', '10:10,15:15,20:20,25:25,50:50,100:100,250:250,500:500,1000:1000,5000:5000');
+	$choices = array();
+	foreach (explode(',', $pagesizechoices) as $choice) {
+		$parts = explode(':', $choice, 2);
+		if (count($parts) === 2 && (int) $parts[0] > 0) $choices[(int) $parts[0]] = $parts[1];
+	}
+	$choices[$limit] = (string) $limit;
+	if ((int) $conf->liste_limit > 0) $choices[(int) $conf->liste_limit] = (string) $conf->liste_limit;
+	ksort($choices, SORT_NUMERIC);
+
+	$buildUrl = static function ($targetPage) use ($baseUrl, $parameters, $pageParameter, $limitParameter, $limit) {
+		$params = $parameters;
+		$params[$pageParameter] = max(0, (int) $targetPage);
+		$params[$limitParameter] = $limit;
+		return $baseUrl.'?'.http_build_query($params, '', '&');
+	};
+
+	$out = '<span class="nowraponall inline-block valignmiddle">';
+	$out .= '<select name="'.$limitParameter.'" class="flat nopadding maxwidth75 center" title="'.dol_escape_htmltag($langs->trans('MaxNbOfRecordPerPage')).'" onchange="this.form.submit()">';
+	foreach ($choices as $value => $label) {
+		$out .= '<option value="'.$value.'"'.($value === $limit ? ' selected="selected"' : '').'>'.dol_escape_htmltag($label).'</option>';
+	}
+	$out .= '</select>';
+	if ($page > 0) {
+		$out .= ' <a class="paginationprevious reposition" href="'.dol_escape_htmltag($buildUrl($page - 1)).'"><i class="fa fa-chevron-left" title="'.dol_escape_htmltag($langs->trans('Previous')).'"></i></a>';
+	}
+	$out .= ' <span class="pagination">'.($page + 1).' / '.$pageCount.'</span>';
+	if ($page + 1 < $pageCount) {
+		$out .= ' <a class="paginationnext reposition" href="'.dol_escape_htmltag($buildUrl($page + 1)).'"><i class="fa fa-chevron-right" title="'.dol_escape_htmltag($langs->trans('Next')).'"></i></a>';
+	}
+	$out .= '</span>';
+
+	return $out;
 }
 
 /**
