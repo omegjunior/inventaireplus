@@ -321,25 +321,42 @@ function inventaireplusConsolidateCollaborativeCount($db, $user, $inventoryId)
 		$db->rollback();
 		return array('ok' => false, 'error' => 'InventoryPlusCollaborativeCampaignClosed');
 	}
+	$verifiedTotals = null;
 	if (empty($user->admin)) {
 		$controlCheck = inventaireplusCheckApprovedControl($db, $inventoryId, (int) $session->rowid);
 		if (empty($controlCheck['ok'])) {
 			$db->rollback();
 			return $controlCheck;
 		}
+		$verificationCheck = inventaireplusGetVerificationTotals($db, $inventoryId, (int) $controlCheck['report']->rowid);
+		if (empty($verificationCheck['ok'])) {
+			$db->rollback();
+			return $verificationCheck;
+		}
+		$verifiedTotals = $verificationCheck['totals'];
+	} elseif (inventaireplusVerificationStorageAvailable($db)) {
+		$sql = 'SELECT rowid FROM '.MAIN_DB_PREFIX.'inventaireplus_count_control WHERE fk_session = '.((int) $session->rowid).' AND status IN (0, 1) ORDER BY sequence DESC'.$db->plimit(1, 0);
+		$resql = $db->query($sql);
+		$currentControl = ($resql ? $db->fetch_object($resql) : null);
+		if ($currentControl) {
+			$verificationCheck = inventaireplusGetVerificationTotals($db, $inventoryId, (int) $currentControl->rowid);
+			if (!empty($verificationCheck['ok'])) $verifiedTotals = $verificationCheck['totals'];
+		}
 	}
 
 	$totals = array();
-	$sql = 'SELECT c.fk_inventorydet, SUM(c.qty) AS counted_qty FROM '.MAIN_DB_PREFIX.'inventaireplus_count_contribution AS c';
-	$sql .= ' INNER JOIN '.MAIN_DB_PREFIX.'inventorydet AS id ON id.rowid = c.fk_inventorydet AND id.fk_inventory = c.fk_inventory';
-	$sql .= ' WHERE c.fk_session = '.((int) $session->rowid).' AND c.active = 1 GROUP BY c.fk_inventorydet';
-	$resql = $db->query($sql);
-	if (!$resql) {
-		$db->rollback();
-		return array('ok' => false, 'error' => 'InventoryPlusCollaborativeDatabaseError');
-	}
-	while ($obj = $db->fetch_object($resql)) {
-		$totals[(int) $obj->fk_inventorydet] = (float) $obj->counted_qty;
+	if (is_array($verifiedTotals)) {
+		$totals = $verifiedTotals;
+	} else {
+		$sql = 'SELECT c.fk_inventorydet, SUM(c.qty) AS counted_qty FROM '.MAIN_DB_PREFIX.'inventaireplus_count_contribution AS c';
+		$sql .= ' INNER JOIN '.MAIN_DB_PREFIX.'inventorydet AS id ON id.rowid = c.fk_inventorydet AND id.fk_inventory = c.fk_inventory';
+		$sql .= ' WHERE c.fk_session = '.((int) $session->rowid).' AND c.active = 1 GROUP BY c.fk_inventorydet';
+		$resql = $db->query($sql);
+		if (!$resql) {
+			$db->rollback();
+			return array('ok' => false, 'error' => 'InventoryPlusCollaborativeDatabaseError');
+		}
+		while ($obj = $db->fetch_object($resql)) $totals[(int) $obj->fk_inventorydet] = (float) $obj->counted_qty;
 	}
 	foreach ($totals as $lineId => $qty) {
 		$sql = 'UPDATE '.MAIN_DB_PREFIX.'inventorydet SET qty_view = '.((float) $qty).' WHERE rowid = '.((int) $lineId).' AND fk_inventory = '.((int) $inventoryId);
@@ -356,6 +373,52 @@ function inventaireplusConsolidateCollaborativeCount($db, $user, $inventoryId)
 	}
 	$db->commit();
 	return array('ok' => true, 'lines' => count($totals));
+}
+
+/**
+ * Validate the latest second-count document and aggregate its immutable values.
+ * Must be called from the consolidation transaction after inventory/session locks.
+ *
+ * @param DoliDB $db Database handler
+ * @param int $inventoryId Inventory id
+ * @param int $controlId First control report id
+ * @return array<string,mixed>
+ */
+function inventaireplusGetVerificationTotals($db, $inventoryId, $controlId)
+{
+	if (!inventaireplusVerificationStorageAvailable($db)) return array('ok' => false, 'error' => 'InventoryPlusCollaborativeVerificationStorageMissing');
+	$sql = 'SELECT c.fk_session, c.content_hash FROM '.MAIN_DB_PREFIX.'inventaireplus_count_control AS c';
+	$sql .= ' INNER JOIN '.MAIN_DB_PREFIX.'inventaireplus_count_session AS s ON s.rowid = c.fk_session';
+	$sql .= ' INNER JOIN '.MAIN_DB_PREFIX.'inventory AS i ON i.rowid = s.fk_inventory';
+	$sql .= ' WHERE c.rowid = '.((int) $controlId).' AND i.rowid = '.((int) $inventoryId).' AND c.entity = '.((int) getEntity('inventory')).' FOR UPDATE';
+	$resql = $db->query($sql);
+	$control = ($resql ? $db->fetch_object($resql) : null);
+	$currentControlDataset = ($control ? inventaireplusBuildControlDataset($db, $inventoryId, (int) $control->fk_session) : null);
+	if (!$control || !$currentControlDataset || (string) $control->content_hash !== (string) $currentControlDataset['content_hash']) {
+		return array('ok' => false, 'error' => 'InventoryPlusCollaborativeControlObsolete');
+	}
+	$sql = 'SELECT rowid FROM '.MAIN_DB_PREFIX.'inventaireplus_count_verification_report';
+	$sql .= ' WHERE fk_control = '.((int) $controlId).' AND status = 0 ORDER BY sequence DESC'.$db->plimit(1, 0);
+	$resql = $db->query($sql);
+	$latest = ($resql ? $db->fetch_object($resql) : null);
+	if (!$latest) return array('ok' => false, 'error' => 'InventoryPlusCollaborativeVerificationRequired');
+
+	$resql = $db->query('SELECT rowid FROM '.MAIN_DB_PREFIX.'inventaireplus_count_verification WHERE fk_control = '.((int) $controlId).' ORDER BY rowid FOR UPDATE');
+	if (!$resql) return array('ok' => false, 'error' => 'InventoryPlusCollaborativeDatabaseError');
+	while ($db->fetch_object($resql)) {
+		// Reading all locked rows prevents a concurrent page save during consolidation.
+	}
+	$resql = $db->query('SELECT * FROM '.MAIN_DB_PREFIX.'inventaireplus_count_verification_report WHERE rowid = '.((int) $latest->rowid).' AND status = 0 FOR UPDATE');
+	$report = ($resql ? $db->fetch_object($resql) : null);
+	$dataset = ($report ? inventaireplusBuildVerificationDataset($db, $inventoryId, $controlId) : null);
+	if (!$report || !$dataset || empty($dataset['complete']) || (int) $report->line_count !== (int) $dataset['line_count'] || (string) $report->content_hash !== (string) $dataset['content_hash']) {
+		return array('ok' => false, 'error' => 'InventoryPlusCollaborativeVerificationRequired');
+	}
+	$totals = array();
+	$resql = $db->query('SELECT fk_inventorydet, SUM(qty_verified) AS counted_qty FROM '.MAIN_DB_PREFIX.'inventaireplus_count_verification WHERE fk_control = '.((int) $controlId).' GROUP BY fk_inventorydet');
+	if (!$resql) return array('ok' => false, 'error' => 'InventoryPlusCollaborativeDatabaseError');
+	while ($obj = $db->fetch_object($resql)) $totals[(int) $obj->fk_inventorydet] = (float) $obj->counted_qty;
+	return array('ok' => true, 'totals' => $totals, 'report' => $report);
 }
 
 /**
@@ -551,9 +614,10 @@ function inventaireplusFetchContribution($db, $sessionId, $contributionId)
  * @param int $page Current zero-based page
  * @param int $limit Number of rows per page
  * @param int $total Total number of rows
+ * @param int $maxLimit Maximum selectable page size, 0 for unlimited
  * @return string
  */
-function inventaireplusBuildListPager($baseUrl, $parameters, $pageParameter, $limitParameter, $page, $limit, $total)
+function inventaireplusBuildListPager($baseUrl, $parameters, $pageParameter, $limitParameter, $page, $limit, $total, $maxLimit = 0)
 {
 	global $conf, $langs;
 
@@ -565,10 +629,10 @@ function inventaireplusBuildListPager($baseUrl, $parameters, $pageParameter, $li
 	$choices = array();
 	foreach (explode(',', $pagesizechoices) as $choice) {
 		$parts = explode(':', $choice, 2);
-		if (count($parts) === 2 && (int) $parts[0] > 0) $choices[(int) $parts[0]] = $parts[1];
+		if (count($parts) === 2 && (int) $parts[0] > 0 && ($maxLimit <= 0 || (int) $parts[0] <= $maxLimit)) $choices[(int) $parts[0]] = $parts[1];
 	}
 	$choices[$limit] = (string) $limit;
-	if ((int) $conf->liste_limit > 0) $choices[(int) $conf->liste_limit] = (string) $conf->liste_limit;
+	if ((int) $conf->liste_limit > 0 && ($maxLimit <= 0 || (int) $conf->liste_limit <= $maxLimit)) $choices[(int) $conf->liste_limit] = (string) $conf->liste_limit;
 	ksort($choices, SORT_NUMERIC);
 
 	$buildUrl = static function ($targetPage) use ($baseUrl, $parameters, $pageParameter, $limitParameter, $limit) {
@@ -613,6 +677,422 @@ function inventaireplusControlStorageAvailable($db)
 }
 
 /**
+ * Check whether verified-count storage is installed.
+ *
+ * @param DoliDB $db Database handler
+ * @return bool
+ */
+function inventaireplusVerificationStorageAvailable($db)
+{
+	static $available = null;
+	if ($available === null) {
+		$lineTable = $db->DDLDescTable(MAIN_DB_PREFIX.'inventaireplus_count_verification');
+		$reportTable = $db->DDLDescTable(MAIN_DB_PREFIX.'inventaireplus_count_verification_report');
+		$available = ($lineTable && $db->num_rows($lineTable) > 0 && $reportTable && $db->num_rows($reportTable) > 0);
+	}
+	return $available;
+}
+
+/**
+ * Insert verified-count snapshot lines from the dataset represented by a control PDF.
+ * Caller must own the surrounding transaction.
+ *
+ * @param DoliDB $db Database handler
+ * @param User $user Current user
+ * @param object $control Control report
+ * @param array<string,mixed> $dataset Control dataset
+ * @return bool
+ */
+function inventaireplusInsertVerificationLines($db, $user, $control, $dataset)
+{
+	$lineOrder = 0;
+	foreach ($dataset['lines'] as $line) {
+		$lineOrder++;
+		$sql = 'INSERT INTO '.MAIN_DB_PREFIX.'inventaireplus_count_verification';
+		$sql .= ' (entity, fk_control, fk_session, fk_contribution, fk_inventorydet, fk_warehouse, fk_product, batch, zone, qty_first, qty_verified, line_order, version, datec, fk_user_author) VALUES (';
+		$sql .= ((int) getEntity('inventory')).', '.((int) $control->rowid).', '.((int) $control->fk_session).', '.((int) $line['rowid']).', '.((int) $line['fk_inventorydet']).', ';
+		$sql .= ((int) $line['fk_warehouse']).', '.((int) $line['fk_product']).', '.($line['batch'] === '' ? 'NULL' : '\''.$db->escape($line['batch']).'\'').', ';
+		$sql .= '\''.$db->escape($line['zone']).'\', '.((float) $line['qty']).', NULL, '.$lineOrder.', 0, \''.$db->idate(dol_now()).'\', '.((int) $user->id).')';
+		if (!$db->query($sql)) return false;
+	}
+	return true;
+}
+
+/**
+ * Create missing verified-count snapshot lines for a current control report.
+ *
+ * @param DoliDB $db Database handler
+ * @param User $user Current user
+ * @param int $inventoryId Inventory id
+ * @param int $controlId Control report id
+ * @return array<string,mixed>
+ */
+function inventaireplusEnsureVerificationLines($db, $user, $inventoryId, $controlId)
+{
+	if (!inventaireplusVerificationStorageAvailable($db)) return array('ok' => false, 'error' => 'InventoryPlusCollaborativeVerificationStorageMissing');
+	$db->begin();
+	$sql = 'SELECT c.* FROM '.MAIN_DB_PREFIX.'inventaireplus_count_control AS c';
+	$sql .= ' INNER JOIN '.MAIN_DB_PREFIX.'inventaireplus_count_session AS s ON s.rowid = c.fk_session';
+	$sql .= ' WHERE c.rowid = '.((int) $controlId).' AND c.entity = '.((int) getEntity('inventory')).' AND s.fk_inventory = '.((int) $inventoryId).' FOR UPDATE';
+	$resql = $db->query($sql);
+	$control = ($resql ? $db->fetch_object($resql) : null);
+	if (!$control || (int) $control->status === 2) {
+		$db->rollback();
+		return array('ok' => false, 'error' => 'InventoryPlusCollaborativeControlObsolete');
+	}
+	$dataset = inventaireplusBuildControlDataset($db, $inventoryId, (int) $control->fk_session);
+	if (!$dataset || $dataset['content_hash'] !== (string) $control->content_hash || (int) $dataset['contribution_count'] !== (int) $control->contribution_count) {
+		$db->query('UPDATE '.MAIN_DB_PREFIX.'inventaireplus_count_control SET status = 2 WHERE rowid = '.((int) $control->rowid));
+		$db->commit();
+		return array('ok' => false, 'error' => 'InventoryPlusCollaborativeControlObsolete');
+	}
+	$resql = $db->query('SELECT COUNT(rowid) AS nb FROM '.MAIN_DB_PREFIX.'inventaireplus_count_verification WHERE fk_control = '.((int) $control->rowid));
+	$countRow = ($resql ? $db->fetch_object($resql) : null);
+	$existing = ($countRow ? (int) $countRow->nb : -1);
+	if ($existing === 0 && !inventaireplusInsertVerificationLines($db, $user, $control, $dataset)) {
+		$db->rollback();
+		return array('ok' => false, 'error' => 'InventoryPlusCollaborativeDatabaseError');
+	}
+	if ($existing > 0 && $existing !== (int) $control->contribution_count) {
+		$db->rollback();
+		return array('ok' => false, 'error' => 'InventoryPlusCollaborativeVerificationSnapshotInvalid');
+	}
+	$db->commit();
+	return array('ok' => true, 'control' => $control, 'created' => ($existing === 0));
+}
+
+/**
+ * Count verification lines for a control report.
+ *
+ * @param DoliDB $db Database handler
+ * @param int $controlId Control report id
+ * @param array<string,mixed> $filters List filters
+ * @return int
+ */
+function inventaireplusCountVerificationLines($db, $controlId, $filters = array())
+{
+	$sql = 'SELECT COUNT(v.rowid) AS nb FROM '.MAIN_DB_PREFIX.'inventaireplus_count_verification AS v';
+	$sql .= ' LEFT JOIN '.MAIN_DB_PREFIX.'product AS p ON p.rowid = v.fk_product';
+	$sql .= ' LEFT JOIN '.MAIN_DB_PREFIX.'user AS u ON u.rowid = v.fk_user_modif';
+	$sql .= ' WHERE v.fk_control = '.((int) $controlId);
+	$sql .= inventaireplusBuildVerificationFilterSql($filters);
+	$resql = $db->query($sql);
+	$obj = ($resql ? $db->fetch_object($resql) : null);
+	return ($obj ? (int) $obj->nb : 0);
+}
+
+/**
+ * Fetch verification lines in the same order as the first-count PDF.
+ *
+ * @param DoliDB $db Database handler
+ * @param int $controlId Control report id
+ * @param int $limit Maximum rows
+ * @param int $offset First row offset
+ * @param array<string,mixed> $filters List filters
+ * @return array<int,object>
+ */
+function inventaireplusFetchVerificationLines($db, $controlId, $limit = 0, $offset = 0, $filters = array())
+{
+	$rows = array();
+	$sql = 'SELECT v.*, p.ref, p.label, u.login AS verifier_login, u.firstname AS verifier_firstname, u.lastname AS verifier_lastname';
+	$sql .= ' FROM '.MAIN_DB_PREFIX.'inventaireplus_count_verification AS v';
+	$sql .= ' LEFT JOIN '.MAIN_DB_PREFIX.'product AS p ON p.rowid = v.fk_product';
+	$sql .= ' LEFT JOIN '.MAIN_DB_PREFIX.'user AS u ON u.rowid = v.fk_user_modif';
+	$sql .= ' WHERE v.fk_control = '.((int) $controlId);
+	$sql .= inventaireplusBuildVerificationFilterSql($filters);
+	$sql .= ' ORDER BY v.line_order ASC, v.rowid ASC';
+	if ($limit > 0) $sql .= $db->plimit(max(1, (int) $limit), max(0, (int) $offset));
+	$resql = $db->query($sql);
+	if ($resql) while ($obj = $db->fetch_object($resql)) $rows[] = $obj;
+	return $rows;
+}
+
+/**
+ * Build filters shared by verified-count list and count queries.
+ *
+ * @param array<string,mixed> $filters List filters
+ * @return string
+ */
+function inventaireplusBuildVerificationFilterSql($filters)
+{
+	$sql = '';
+	if ((string) ($filters['line_order'] ?? '') !== '') $sql .= inventaireplusBuildNumericFilterSql('v.line_order', $filters['line_order']);
+	if (!empty($filters['zone'])) $sql .= natural_search('v.zone', $filters['zone']);
+	if (!empty($filters['ref'])) $sql .= natural_search('p.ref', $filters['ref']);
+	if (!empty($filters['label'])) $sql .= natural_search('p.label', $filters['label']);
+	if (!empty($filters['batch'])) $sql .= natural_search('v.batch', $filters['batch']);
+	if ((string) ($filters['qty_first'] ?? '') !== '') $sql .= inventaireplusBuildNumericFilterSql('v.qty_first', $filters['qty_first']);
+	if ((string) ($filters['qty_verified'] ?? '') !== '') $sql .= inventaireplusBuildNumericFilterSql('v.qty_verified', $filters['qty_verified']);
+	if ((string) ($filters['difference'] ?? '') !== '') $sql .= inventaireplusBuildNumericFilterSql('(v.qty_verified - v.qty_first)', $filters['difference']);
+	if (!empty($filters['verifier'])) $sql .= natural_search(array('u.login', 'u.firstname', 'u.lastname'), $filters['verifier']);
+	return $sql;
+}
+
+/**
+ * Save one page of verified quantities atomically with optimistic concurrency checks.
+ *
+ * @param DoliDB $db Database handler
+ * @param User $user Current user
+ * @param int $inventoryId Inventory id
+ * @param int $controlId Control report id
+ * @param array<int,array{qty:string,version:int}> $updates Posted line updates
+ * @return array<string,mixed>
+ */
+function inventaireplusSaveVerificationLines($db, $user, $inventoryId, $controlId, $updates)
+{
+	if (!inventaireplusVerificationStorageAvailable($db)) return array('ok' => false, 'error' => 'InventoryPlusCollaborativeVerificationStorageMissing');
+	if (empty($updates)) return array('ok' => false, 'error' => 'InventoryPlusCollaborativeNoVerificationLine');
+	$db->begin();
+	$sql = 'SELECT c.*, s.status AS session_status FROM '.MAIN_DB_PREFIX.'inventaireplus_count_control AS c';
+	$sql .= ' INNER JOIN '.MAIN_DB_PREFIX.'inventaireplus_count_session AS s ON s.rowid = c.fk_session';
+	$sql .= ' INNER JOIN '.MAIN_DB_PREFIX.'inventory AS i ON i.rowid = s.fk_inventory';
+	$sql .= ' WHERE c.rowid = '.((int) $controlId).' AND c.entity = '.((int) getEntity('inventory')).' AND i.rowid = '.((int) $inventoryId).' AND i.status = '.Inventory::STATUS_VALIDATED.' FOR UPDATE';
+	$resql = $db->query($sql);
+	$control = ($resql ? $db->fetch_object($resql) : null);
+	if (!$control || (int) $control->status === 2 || (int) $control->session_status !== 0) {
+		$db->rollback();
+		return array('ok' => false, 'error' => 'InventoryPlusCollaborativeControlObsolete');
+	}
+	$dataset = inventaireplusBuildControlDataset($db, $inventoryId, (int) $control->fk_session);
+	if (!$dataset || $dataset['content_hash'] !== (string) $control->content_hash) {
+		$db->rollback();
+		return array('ok' => false, 'error' => 'InventoryPlusCollaborativeControlObsolete');
+	}
+	foreach ($updates as $lineId => $update) {
+		$resql = $db->query('SELECT rowid, version FROM '.MAIN_DB_PREFIX.'inventaireplus_count_verification WHERE rowid = '.((int) $lineId).' AND fk_control = '.((int) $controlId).' FOR UPDATE');
+		$line = ($resql ? $db->fetch_object($resql) : null);
+		if (!$line || (int) $line->version !== (int) $update['version']) {
+			$db->rollback();
+			return array('ok' => false, 'error' => 'InventoryPlusCollaborativeVerificationConcurrentUpdate');
+		}
+		$rawQty = trim((string) $update['qty']);
+		$qtySql = 'NULL';
+		$userModifSql = 'NULL';
+		if ($rawQty !== '') {
+			$qty = price2num($rawQty, 'MS');
+			if (!is_numeric($qty) || (float) $qty < 0) {
+				$db->rollback();
+				return array('ok' => false, 'error' => 'InventoryPlusCollaborativeVerificationInvalidQty');
+			}
+			$qtySql = (string) ((float) $qty);
+			$userModifSql = (string) ((int) $user->id);
+		}
+		$sql = 'UPDATE '.MAIN_DB_PREFIX.'inventaireplus_count_verification SET qty_verified = '.$qtySql.', version = version + 1, fk_user_modif = '.$userModifSql;
+		$sql .= ' WHERE rowid = '.((int) $lineId).' AND fk_control = '.((int) $controlId).' AND version = '.((int) $update['version']);
+		$resupdate = $db->query($sql);
+		if (!$resupdate || $db->affected_rows($resupdate) !== 1) {
+			$db->rollback();
+			return array('ok' => false, 'error' => 'InventoryPlusCollaborativeVerificationConcurrentUpdate');
+		}
+	}
+	if (!$db->query('UPDATE '.MAIN_DB_PREFIX.'inventaireplus_count_verification_report SET status = 2 WHERE fk_control = '.((int) $controlId).' AND status = 0')) {
+		$db->rollback();
+		return array('ok' => false, 'error' => 'InventoryPlusCollaborativeDatabaseError');
+	}
+	$db->commit();
+	return array('ok' => true, 'lines' => count($updates));
+}
+
+/**
+ * Build the immutable dataset for a verified second-count document.
+ *
+ * @param DoliDB $db Database handler
+ * @param int $inventoryId Inventory id
+ * @param int $controlId Control report id
+ * @return array<string,mixed>|null
+ */
+function inventaireplusBuildVerificationDataset($db, $inventoryId, $controlId)
+{
+	$sql = 'SELECT c.rowid AS control_id, c.sequence AS control_sequence, c.content_hash AS control_hash, c.fk_session,';
+	$sql .= ' i.rowid AS inventory_id, i.ref AS inventory_ref, i.title AS inventory_title, i.fk_warehouse, e.ref AS warehouse_ref';
+	$sql .= ' FROM '.MAIN_DB_PREFIX.'inventaireplus_count_control AS c';
+	$sql .= ' INNER JOIN '.MAIN_DB_PREFIX.'inventaireplus_count_session AS s ON s.rowid = c.fk_session';
+	$sql .= ' INNER JOIN '.MAIN_DB_PREFIX.'inventory AS i ON i.rowid = s.fk_inventory';
+	$sql .= ' LEFT JOIN '.MAIN_DB_PREFIX.'entrepot AS e ON e.rowid = i.fk_warehouse';
+	$sql .= ' WHERE c.rowid = '.((int) $controlId).' AND i.rowid = '.((int) $inventoryId).' AND c.entity = '.((int) getEntity('inventory'));
+	$resql = $db->query($sql);
+	$context = ($resql ? $db->fetch_object($resql) : null);
+	if (!$context) return null;
+
+	$lines = array();
+	$zones = array();
+	$canonical = array();
+	$complete = true;
+	$sql = 'SELECT v.*, p.ref AS product_ref, p.label AS product_label, c.datec AS contribution_date, uc.login AS contributor_login,';
+	$sql .= ' uv.login AS verifier_login, uv.firstname AS verifier_firstname, uv.lastname AS verifier_lastname';
+	$sql .= ' FROM '.MAIN_DB_PREFIX.'inventaireplus_count_verification AS v';
+	$sql .= ' LEFT JOIN '.MAIN_DB_PREFIX.'product AS p ON p.rowid = v.fk_product';
+	$sql .= ' LEFT JOIN '.MAIN_DB_PREFIX.'inventaireplus_count_contribution AS c ON c.rowid = v.fk_contribution';
+	$sql .= ' LEFT JOIN '.MAIN_DB_PREFIX.'user AS uc ON uc.rowid = c.fk_user_author';
+	$sql .= ' LEFT JOIN '.MAIN_DB_PREFIX.'user AS uv ON uv.rowid = v.fk_user_modif';
+	$sql .= ' WHERE v.fk_control = '.((int) $controlId).' ORDER BY v.line_order ASC, v.rowid ASC';
+	$resql = $db->query($sql);
+	if (!$resql) return null;
+	while ($obj = $db->fetch_object($resql)) {
+		$verified = ($obj->qty_verified === null ? null : (float) price2num($obj->qty_verified, 'MS'));
+		$line = array(
+			'rowid' => (int) $obj->rowid,
+			'fk_contribution' => (int) $obj->fk_contribution,
+			'fk_inventorydet' => (int) $obj->fk_inventorydet,
+			'fk_product' => (int) $obj->fk_product,
+			'zone' => (string) $obj->zone,
+			'batch' => (string) $obj->batch,
+			'product_ref' => (string) $obj->product_ref,
+			'product_label' => (string) $obj->product_label,
+			'qty_first' => (float) price2num($obj->qty_first, 'MS'),
+			'qty_verified' => $verified,
+			'difference' => ($verified === null ? null : $verified - (float) $obj->qty_first),
+			'contribution_date' => (string) $obj->contribution_date,
+			'contributor_login' => (string) $obj->contributor_login,
+			'verifier_login' => (string) $obj->verifier_login,
+			'verifier_name' => trim((string) $obj->verifier_firstname.' '.(string) $obj->verifier_lastname),
+			'fk_user_modif' => (int) $obj->fk_user_modif,
+			'line_order' => (int) $obj->line_order,
+		);
+		$lines[] = $line;
+		if ($verified === null) $complete = false;
+		$zoneKey = $line['zone'];
+		if (!isset($zones[$zoneKey])) $zones[$zoneKey] = array('label' => $line['zone'], 'lines' => array(), 'total_first' => 0.0, 'total_verified' => 0.0);
+		$zones[$zoneKey]['lines'][] = $line;
+		$zones[$zoneKey]['total_first'] += $line['qty_first'];
+		if ($verified !== null) $zones[$zoneKey]['total_verified'] += $verified;
+		$canonical[] = array(
+			'line' => $line['rowid'],
+			'contribution' => $line['fk_contribution'],
+			'inventory_line' => $line['fk_inventorydet'],
+			'first' => number_format($line['qty_first'], 8, '.', ''),
+			'verified' => ($verified === null ? null : number_format($verified, 8, '.', '')),
+			'verifier' => $line['fk_user_modif'],
+			'verifier_login' => $line['verifier_login'],
+			'verifier_name' => $line['verifier_name'],
+			'version_order' => $line['line_order'],
+		);
+	}
+	$db->free($resql);
+	$contextData = array(
+		'inventory_id' => (int) $context->inventory_id,
+		'inventory_ref' => (string) $context->inventory_ref,
+		'inventory_title' => (string) $context->inventory_title,
+		'warehouse_id' => (int) $context->fk_warehouse,
+		'warehouse_ref' => (string) $context->warehouse_ref,
+		'control_id' => (int) $context->control_id,
+		'control_sequence' => (int) $context->control_sequence,
+		'control_hash' => (string) $context->control_hash,
+		'session_id' => (int) $context->fk_session,
+	);
+	$encoded = json_encode(array('context' => $contextData, 'lines' => $canonical), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+	if ($encoded === false) return null;
+	return array('context' => $contextData, 'lines' => $lines, 'zones' => array_values($zones), 'line_count' => count($lines), 'complete' => $complete, 'content_hash' => hash('sha256', $encoded));
+}
+
+/**
+ * Fetch the latest verified-count report for a control report.
+ *
+ * @param DoliDB $db Database handler
+ * @param int $controlId Control report id
+ * @return object|null
+ */
+function inventaireplusFetchLatestVerificationReport($db, $controlId)
+{
+	if (!inventaireplusVerificationStorageAvailable($db)) return null;
+	$sql = 'SELECT r.*, u.login AS author_login FROM '.MAIN_DB_PREFIX.'inventaireplus_count_verification_report AS r';
+	$sql .= ' LEFT JOIN '.MAIN_DB_PREFIX.'user AS u ON u.rowid = r.fk_user_author';
+	$sql .= ' WHERE r.fk_control = '.((int) $controlId).' ORDER BY r.sequence DESC'.$db->plimit(1, 0);
+	$resql = $db->query($sql);
+	return ($resql ? $db->fetch_object($resql) : null);
+}
+
+/**
+ * Generate and register PDF/XLSX documents for a completed verified count.
+ *
+ * @param DoliDB $db Database handler
+ * @param User $user Current user
+ * @param int $inventoryId Inventory id
+ * @param int $controlId Control report id
+ * @param Translate $langs Output language
+ * @return array<string,mixed>
+ */
+function inventaireplusCreateVerificationReport($db, $user, $inventoryId, $controlId, $langs)
+{
+	global $conf;
+	if (!inventaireplusVerificationStorageAvailable($db)) return array('ok' => false, 'error' => 'InventoryPlusCollaborativeVerificationStorageMissing');
+	$db->begin();
+	$sql = 'SELECT c.*, s.status AS session_status FROM '.MAIN_DB_PREFIX.'inventaireplus_count_control AS c';
+	$sql .= ' INNER JOIN '.MAIN_DB_PREFIX.'inventaireplus_count_session AS s ON s.rowid = c.fk_session';
+	$sql .= ' INNER JOIN '.MAIN_DB_PREFIX.'inventory AS i ON i.rowid = s.fk_inventory';
+	$sql .= ' WHERE c.rowid = '.((int) $controlId).' AND i.rowid = '.((int) $inventoryId).' AND c.entity = '.((int) getEntity('inventory')).' FOR UPDATE';
+	$resql = $db->query($sql);
+	$control = ($resql ? $db->fetch_object($resql) : null);
+	if (!$control || (int) $control->status === 2 || (int) $control->session_status !== 0) {
+		$db->rollback();
+		return array('ok' => false, 'error' => 'InventoryPlusCollaborativeControlObsolete');
+	}
+	$currentControlDataset = inventaireplusBuildControlDataset($db, $inventoryId, (int) $control->fk_session);
+	if (!$currentControlDataset || $currentControlDataset['content_hash'] !== (string) $control->content_hash) {
+		$db->rollback();
+		return array('ok' => false, 'error' => 'InventoryPlusCollaborativeControlObsolete');
+	}
+	$resql = $db->query('SELECT rowid FROM '.MAIN_DB_PREFIX.'inventaireplus_count_verification WHERE fk_control = '.((int) $controlId).' ORDER BY rowid FOR UPDATE');
+	if (!$resql) {
+		$db->rollback();
+		return array('ok' => false, 'error' => 'InventoryPlusCollaborativeDatabaseError');
+	}
+	while ($db->fetch_object($resql)) {
+		// Lock the complete second count while its immutable documents are built.
+	}
+	$dataset = inventaireplusBuildVerificationDataset($db, $inventoryId, $controlId);
+	if (!$dataset || empty($dataset['lines'])) {
+		$db->rollback();
+		return array('ok' => false, 'error' => 'InventoryPlusCollaborativeNoVerificationLine');
+	}
+	if (empty($dataset['complete'])) {
+		$db->rollback();
+		return array('ok' => false, 'error' => 'InventoryPlusCollaborativeVerificationIncomplete');
+	}
+	$resql = $db->query('SELECT COALESCE(MAX(sequence), 0) + 1 AS next_sequence FROM '.MAIN_DB_PREFIX.'inventaireplus_count_verification_report WHERE fk_control = '.((int) $controlId));
+	$sequenceRow = ($resql ? $db->fetch_object($resql) : null);
+	$sequence = ($sequenceRow ? (int) $sequenceRow->next_sequence : 1);
+	if (!$db->query('UPDATE '.MAIN_DB_PREFIX.'inventaireplus_count_verification_report SET status = 2 WHERE fk_control = '.((int) $controlId).' AND status = 0')) {
+		$db->rollback();
+		return array('ok' => false, 'error' => 'InventoryPlusCollaborativeDatabaseError');
+	}
+	$stockDirOutput = (!empty($conf->stock->multidir_output[$conf->entity]) ? $conf->stock->multidir_output[$conf->entity] : $conf->stock->dir_output);
+	$inventoryRefSafe = ((int) $inventoryId).'_'.dol_sanitizeFileName(dol_trunc($dataset['context']['inventory_ref'], 64, 'right', 'UTF-8', 1));
+	$dirOutput = $stockDirOutput.'/movement/inventaireplus/verification/'.$inventoryRefSafe;
+	$pdfFullPath = '';
+	$xlsxFullPath = '';
+	try {
+		require_once DOL_DOCUMENT_ROOT.'/custom/inventaireplus/core/modules/inventory/doc/pdf_comptageverifie.modules.php';
+		require_once DOL_DOCUMENT_ROOT.'/custom/inventaireplus/lib/inventoryspreadsheet.lib.php';
+		$pdfModel = new pdf_comptageverifie($db);
+		$pdfResult = $pdfModel->write_file(array('dataset' => $dataset, 'sequence' => $sequence, 'diroutput' => $dirOutput), $langs);
+		if ($pdfResult <= 0 || empty($pdfModel->result['fullpath'])) throw new RuntimeException('Verified-count PDF generation failed');
+		$pdfFullPath = $pdfModel->result['fullpath'];
+		$xlsxResult = inventaireplusWriteVerificationSpreadsheet($dataset, $sequence, $dirOutput, $langs);
+		if (empty($xlsxResult['ok'])) throw new RuntimeException('Verified-count spreadsheet generation failed');
+		$xlsxFullPath = $xlsxResult['fullpath'];
+	} catch (Throwable $e) {
+		$db->rollback();
+		if ($pdfFullPath !== '') @unlink($pdfFullPath);
+		if ($xlsxFullPath !== '') @unlink($xlsxFullPath);
+		dol_syslog(__FUNCTION__.' document generation failed: '.$e->getMessage(), LOG_ERR);
+		return array('ok' => false, 'error' => 'InventoryPlusCollaborativeVerificationDocumentFailed');
+	}
+	$sql = 'INSERT INTO '.MAIN_DB_PREFIX.'inventaireplus_count_verification_report';
+	$sql .= ' (entity, fk_control, sequence, line_count, content_hash, file_path, status, datec, fk_user_author) VALUES (';
+	$sql .= ((int) getEntity('inventory')).', '.((int) $controlId).', '.$sequence.', '.((int) $dataset['line_count']).', \''.$db->escape($dataset['content_hash']).'\', ';
+	$sql .= '\''.$db->escape($pdfModel->result['relativefile']).'\', 0, \''.$db->idate(dol_now()).'\', '.((int) $user->id).')';
+	if (!$db->query($sql)) {
+		$db->rollback();
+		@unlink($pdfFullPath);
+		@unlink($xlsxFullPath);
+		return array('ok' => false, 'error' => 'InventoryPlusCollaborativeDatabaseError');
+	}
+	$db->commit();
+	return array('ok' => true, 'relativefile' => $pdfModel->result['relativefile'], 'xlsx_relativefile' => $xlsxResult['relativefile']);
+}
+
+/**
  * Invalidate generated or approved control sheets after a contribution change.
  *
  * @param DoliDB $db Database handler
@@ -623,6 +1103,11 @@ function inventaireplusInvalidateControlReports($db, $sessionId)
 {
 	// Keep collaborative counting operational while a newly deployed module is awaiting reactivation.
 	if (!inventaireplusControlStorageAvailable($db)) return true;
+	if (inventaireplusVerificationStorageAvailable($db)) {
+		$sql = 'UPDATE '.MAIN_DB_PREFIX.'inventaireplus_count_verification_report SET status = 2';
+		$sql .= ' WHERE status = 0 AND fk_control IN (SELECT rowid FROM '.MAIN_DB_PREFIX.'inventaireplus_count_control WHERE fk_session = '.((int) $sessionId).')';
+		if (!$db->query($sql)) return false;
+	}
 	$sql = 'UPDATE '.MAIN_DB_PREFIX.'inventaireplus_count_control SET status = 2';
 	$sql .= ' WHERE fk_session = '.((int) $sessionId).' AND status IN (0, 1)';
 	return (bool) $db->query($sql);
@@ -790,17 +1275,34 @@ function inventaireplusCreateControlReport($db, $user, $inventoryId, $langs)
 	$stockDirOutput = (!empty($conf->stock->multidir_output[$conf->entity]) ? $conf->stock->multidir_output[$conf->entity] : $conf->stock->dir_output);
 	$inventoryRefSafe = ((int) $dataset['context']['inventory_id']).'_'.dol_sanitizeFileName(dol_trunc($dataset['context']['inventory_ref'], 64, 'right', 'UTF-8', 1));
 	$dirOutput = $stockDirOutput.'/movement/inventaireplus/control/'.$inventoryRefSafe;
+	$pdfFullPath = '';
+	$xlsxFullPath = '';
+	$blindPdfFullPath = '';
+	$blindXlsxFullPath = '';
 	try {
 		require_once DOL_DOCUMENT_ROOT.'/custom/inventaireplus/core/modules/inventory/doc/pdf_controlecontributions.modules.php';
+		require_once DOL_DOCUMENT_ROOT.'/custom/inventaireplus/lib/inventoryspreadsheet.lib.php';
 		$pdfModel = new pdf_controlecontributions($db);
 		$pdfResult = $pdfModel->write_file(array('dataset' => $dataset, 'sequence' => $sequence, 'diroutput' => $dirOutput), $langs);
+		if ($pdfResult <= 0 || empty($pdfModel->result['fullpath']) || empty($pdfModel->result['relativefile'])) throw new RuntimeException('Control PDF generation failed');
+		$pdfFullPath = $pdfModel->result['fullpath'];
+		$xlsxResult = inventaireplusWriteControlSpreadsheet($dataset, $sequence, $dirOutput, $langs);
+		if (empty($xlsxResult['ok'])) throw new RuntimeException('Control spreadsheet generation failed');
+		$xlsxFullPath = $xlsxResult['fullpath'];
+		$blindPdfModel = new pdf_controlecontributions($db);
+		$blindPdfResult = $blindPdfModel->write_file(array('dataset' => $dataset, 'sequence' => $sequence, 'diroutput' => $dirOutput, 'blind_count' => 1), $langs);
+		if ($blindPdfResult <= 0 || empty($blindPdfModel->result['fullpath']) || empty($blindPdfModel->result['relativefile'])) throw new RuntimeException('Blind second-count PDF generation failed');
+		$blindPdfFullPath = $blindPdfModel->result['fullpath'];
+		$blindXlsxResult = inventaireplusWriteControlSpreadsheet($dataset, $sequence, $dirOutput, $langs, true);
+		if (empty($blindXlsxResult['ok'])) throw new RuntimeException('Blind second-count spreadsheet generation failed');
+		$blindXlsxFullPath = $blindXlsxResult['fullpath'];
 	} catch (Throwable $e) {
 		$db->rollback();
-		dol_syslog(__FUNCTION__.' PDF generation failed: '.$e->getMessage(), LOG_ERR);
-		return array('ok' => false, 'error' => 'InventoryPlusCollaborativeControlPdfFailed');
-	}
-	if ($pdfResult <= 0 || empty($pdfModel->result['fullpath']) || empty($pdfModel->result['relativefile'])) {
-		$db->rollback();
+		if ($pdfFullPath !== '') @unlink($pdfFullPath);
+		if ($xlsxFullPath !== '') @unlink($xlsxFullPath);
+		if ($blindPdfFullPath !== '') @unlink($blindPdfFullPath);
+		if ($blindXlsxFullPath !== '') @unlink($blindXlsxFullPath);
+		dol_syslog(__FUNCTION__.' document generation failed: '.$e->getMessage(), LOG_ERR);
 		return array('ok' => false, 'error' => 'InventoryPlusCollaborativeControlPdfFailed');
 	}
 
@@ -810,12 +1312,26 @@ function inventaireplusCreateControlReport($db, $user, $inventoryId, $langs)
 	$sql .= '\''.$db->escape($dataset['content_hash']).'\', \''.$db->escape($pdfModel->result['relativefile']).'\', 0, \''.$db->idate(dol_now()).'\', '.((int) $user->id).')';
 	if (!$db->query($sql)) {
 		$db->rollback();
-		@unlink($pdfModel->result['fullpath']);
+		@unlink($pdfFullPath);
+		@unlink($xlsxFullPath);
+		@unlink($blindPdfFullPath);
+		@unlink($blindXlsxFullPath);
 		return $result;
 	}
 	$reportId = (int) $db->last_insert_id(MAIN_DB_PREFIX.'inventaireplus_count_control');
+	if (inventaireplusVerificationStorageAvailable($db)) {
+		$control = (object) array('rowid' => $reportId, 'fk_session' => (int) $session->rowid);
+		if (!inventaireplusInsertVerificationLines($db, $user, $control, $dataset)) {
+			$db->rollback();
+			@unlink($pdfFullPath);
+			@unlink($xlsxFullPath);
+			@unlink($blindPdfFullPath);
+			@unlink($blindXlsxFullPath);
+			return $result;
+		}
+	}
 	$db->commit();
-	return array('ok' => true, 'report_id' => $reportId, 'relativefile' => $pdfModel->result['relativefile'], 'content_hash' => $dataset['content_hash']);
+	return array('ok' => true, 'report_id' => $reportId, 'relativefile' => $pdfModel->result['relativefile'], 'xlsx_relativefile' => $xlsxResult['relativefile'], 'blind_relativefile' => $blindPdfModel->result['relativefile'], 'blind_xlsx_relativefile' => $blindXlsxResult['relativefile'], 'content_hash' => $dataset['content_hash']);
 }
 
 /**
@@ -894,6 +1410,7 @@ function inventaireplusCheckApprovedControl($db, $inventoryId, $sessionId)
 	$sql = 'SELECT * FROM '.MAIN_DB_PREFIX.'inventaireplus_count_control';
 	$sql .= ' WHERE fk_session = '.((int) $sessionId).' AND status = 1 ORDER BY sequence DESC';
 	$sql .= $db->plimit(1, 0);
+	$sql .= ' FOR UPDATE';
 	$resql = $db->query($sql);
 	$report = ($resql ? $db->fetch_object($resql) : null);
 	if (!$report || empty($report->fk_user_approval)) {

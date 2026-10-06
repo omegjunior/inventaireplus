@@ -34,12 +34,14 @@ $action = GETPOST('action', 'aZ09');
 $confirm = GETPOST('confirm', 'alpha');
 $view = GETPOST('view', 'aZ09');
 $viewProvided = GETPOSTISSET('view');
-if (!in_array($view, array('count', 'control'), true)) $view = 'count';
+if (!in_array($view, array('count', 'verification', 'control'), true)) $view = 'count';
 $defaultListLimit = max(1, (int) $conf->liste_limit);
 $totalsLimit = max(1, GETPOSTINT('totals_limit') > 0 ? GETPOSTINT('totals_limit') : $defaultListLimit);
 $totalsPage = max(0, GETPOSTINT('totals_page'));
 $contributionsLimit = max(1, GETPOSTINT('contributions_limit') > 0 ? GETPOSTINT('contributions_limit') : $defaultListLimit);
 $contributionsPage = max(0, GETPOSTINT('contributions_page'));
+$verificationLimit = min(250, max(1, GETPOSTINT('verification_limit') > 0 ? GETPOSTINT('verification_limit') : $defaultListLimit));
+$verificationPage = max(0, GETPOSTINT('verification_page'));
 $listContext = GETPOST('list_context', 'aZ09');
 $buttonSearch = GETPOST('button_search', 'alphanohtml');
 $buttonRemoveFilter = GETPOST('button_removefilter', 'alphanohtml') || GETPOST('button_removefilter_x', 'alphanohtml') || GETPOST('button_removefilter.x', 'alphanohtml');
@@ -65,9 +67,19 @@ $searchContribZone = GETPOST('search_contrib_zone', 'alphanohtml');
 $searchContribProduct = GETPOST('search_contrib_product', 'alphanohtml');
 $searchContribBatch = GETPOST('search_contrib_batch', 'alphanohtml');
 $searchContribQty = GETPOST('search_contrib_qty', 'alphanohtml');
+$searchVerificationOrder = GETPOST('search_verification_order', 'alphanohtml');
+$searchVerificationZone = GETPOST('search_verification_zone', 'alphanohtml');
+$searchVerificationRef = GETPOST('search_verification_ref', 'alphanohtml');
+$searchVerificationLabel = GETPOST('search_verification_label', 'alphanohtml');
+$searchVerificationBatch = GETPOST('search_verification_batch', 'alphanohtml');
+$searchVerificationFirst = GETPOST('search_verification_first', 'alphanohtml');
+$searchVerificationVerified = GETPOST('search_verification_verified', 'alphanohtml');
+$searchVerificationDifference = GETPOST('search_verification_difference', 'alphanohtml');
+$searchVerificationVerifier = GETPOST('search_verification_verifier', 'alphanohtml');
 if (!isModEnabled('productbatch')) {
 	$searchTotalsBatch = '';
 	$searchContribBatch = '';
+	$searchVerificationBatch = '';
 }
 
 if ($buttonRemoveFilter && $listContext === 'totals') {
@@ -78,8 +90,13 @@ if ($buttonRemoveFilter && $listContext === 'contributions') {
 	$searchContribDateStart = $searchContribDateEnd = 0;
 	$searchContribUser = $searchContribZone = $searchContribProduct = $searchContribBatch = $searchContribQty = '';
 }
+if ($buttonRemoveFilter && $listContext === 'verification') {
+	$searchVerificationOrder = $searchVerificationZone = $searchVerificationRef = $searchVerificationLabel = $searchVerificationBatch = '';
+	$searchVerificationFirst = $searchVerificationVerified = $searchVerificationDifference = $searchVerificationVerifier = '';
+}
 if (($buttonSearch || $buttonRemoveFilter) && $listContext === 'totals') $totalsPage = 0;
 if (($buttonSearch || $buttonRemoveFilter) && $listContext === 'contributions') $contributionsPage = 0;
+if (($buttonSearch || $buttonRemoveFilter) && $listContext === 'verification') $verificationPage = 0;
 
 $totalsFilters = array(
 	'ref' => $searchTotalsRef,
@@ -99,6 +116,28 @@ $contributionsFilters = array(
 	'batch' => $searchContribBatch,
 	'qty' => $searchContribQty,
 );
+$verificationFilters = array(
+	'line_order' => $searchVerificationOrder,
+	'zone' => $searchVerificationZone,
+	'ref' => $searchVerificationRef,
+	'label' => $searchVerificationLabel,
+	'batch' => $searchVerificationBatch,
+	'qty_first' => $searchVerificationFirst,
+	'qty_verified' => $searchVerificationVerified,
+	'difference' => $searchVerificationDifference,
+	'verifier' => $searchVerificationVerifier,
+);
+$verificationFilterParameters = array_filter(array(
+	'search_verification_order' => $searchVerificationOrder,
+	'search_verification_zone' => $searchVerificationZone,
+	'search_verification_ref' => $searchVerificationRef,
+	'search_verification_label' => $searchVerificationLabel,
+	'search_verification_batch' => $searchVerificationBatch,
+	'search_verification_first' => $searchVerificationFirst,
+	'search_verification_verified' => $searchVerificationVerified,
+	'search_verification_difference' => $searchVerificationDifference,
+	'search_verification_verifier' => $searchVerificationVerifier,
+), static function ($value) { return (string) $value !== ''; });
 $countListFilterParameters = array_filter(array(
 	'search_totals_ref' => $searchTotalsRef,
 	'search_totals_label' => $searchTotalsLabel,
@@ -124,6 +163,10 @@ $selectedFieldsContexts = array(
 		'field' => 'selectedfields_contributions',
 		'allowed' => array('contrib_date', 'contrib_user', 'contrib_zone', 'contrib_product', 'contrib_batch', 'contrib_qty'),
 	),
+	'inventaireplus_collaborative_verification' => array(
+		'field' => 'selectedfields_verification',
+		'allowed' => array('verification_order', 'verification_zone', 'verification_ref', 'verification_label', 'verification_batch', 'verification_first', 'verification_verified', 'verification_difference', 'verification_verifier'),
+	),
 );
 $isAdmin = !empty($user->admin);
 $canReadInventory = ($isAdmin || $user->hasRight('stock', 'lire') || $user->hasRight('stock', 'inventory_advance', 'read') || $user->hasRight('stock', 'inventory_advance', 'write'));
@@ -132,12 +175,19 @@ $canConsolidate = ($isAdmin || ($canReadInventory && $user->hasRight('inventaire
 $canControl = ($isAdmin || ($canReadInventory && $user->hasRight('inventaireplus', 'collaborativecount', 'control')));
 if (!$canCount && !$canConsolidate && !$canControl) accessforbidden();
 if (!$viewProvided && !$canCount && ($canConsolidate || $canControl)) $view = 'control';
+if ($view === 'verification' && !$canControl) accessforbidden();
 
 $object = new Inventory($db);
 if ($inventoryId <= 0 || $object->fetch($inventoryId) <= 0) accessforbidden();
 if ((int) $object->entity !== (int) getEntity('inventory')) accessforbidden();
 
 $session = inventaireplusFetchCountSession($db, $inventoryId);
+$controlStorageAvailable = inventaireplusControlStorageAvailable($db);
+$controlReport = ($session && $controlStorageAvailable ? inventaireplusFetchLatestControlReport($db, (int) $session->rowid) : null);
+if ($view === 'verification' && $canControl && $controlReport && (int) $controlReport->status !== 2 && inventaireplusVerificationStorageAvailable($db)) {
+	$ensureVerification = inventaireplusEnsureVerificationLines($db, $user, $inventoryId, (int) $controlReport->rowid);
+	if (empty($ensureVerification['ok'])) setEventMessages($langs->trans($ensureVerification['error']), null, 'errors');
+}
 
 /*
  * Actions
@@ -200,6 +250,36 @@ if ($action === 'buildcontrolpdf' && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POS
 	setEventMessages($langs->trans($result['error']), null, 'errors');
 }
 
+if ($action === 'saveverification' && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && $canControl) {
+	$controlId = GETPOSTINT('control_id');
+	$updates = array();
+	$allVerificationQuantitiesProvided = true;
+	$lineIds = GETPOST('verification_line_ids', 'array');
+	if (is_array($lineIds)) {
+		foreach (array_unique(array_map('intval', $lineIds)) as $lineId) {
+			if ($lineId <= 0) continue;
+			if (!GETPOSTISSET('verified_qty_'.$lineId) || !GETPOSTISSET('verification_version_'.$lineId)) $allVerificationQuantitiesProvided = false;
+			$updates[$lineId] = array('qty' => GETPOST('verified_qty_'.$lineId, 'alphanohtml'), 'version' => GETPOSTINT('verification_version_'.$lineId));
+		}
+	}
+	$expectedLines = GETPOSTINT('expected_verification_lines');
+	$result = ($expectedLines > 0 && (count($updates) !== $expectedLines || !$allVerificationQuantitiesProvided) ? array('ok' => false, 'error' => 'InventoryPlusCollaborativeVerificationInputTruncated') : inventaireplusSaveVerificationLines($db, $user, $inventoryId, $controlId, $updates));
+	if (!empty($result['ok'])) setEventMessages($langs->trans('InventoryPlusCollaborativeVerificationSaved', $result['lines']), null, 'mesgs');
+	else setEventMessages($langs->trans($result['error']), null, 'errors');
+	header('Location: '.$_SERVER['PHP_SELF'].'?'.http_build_query(array_merge(array('id' => $inventoryId, 'view' => 'verification', 'verification_page' => $verificationPage, 'verification_limit' => $verificationLimit), $verificationFilterParameters), '', '&'));
+	exit;
+}
+
+if ($action === 'buildverificationpdf' && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && $canControl) {
+	$result = inventaireplusCreateVerificationReport($db, $user, $inventoryId, GETPOSTINT('control_id'), $langs);
+	if (!empty($result['ok'])) {
+		setEventMessages($langs->trans('InventoryPlusCollaborativeVerificationGenerated'), null, 'mesgs');
+		header('Location: '.DOL_URL_ROOT.'/document.php?modulepart=movement&file='.urlencode($result['relativefile']));
+		exit;
+	}
+	setEventMessages($langs->trans($result['error']), null, 'errors');
+}
+
 if ($action === 'approvecontrol' && $confirm === 'yes' && $canControl) {
 	$result = inventaireplusApproveControlReport($db, $user, $inventoryId, GETPOSTINT('control_id'));
 	if (!empty($result['ok'])) {
@@ -225,10 +305,21 @@ if ($session && $view === 'count') {
 	if ($contributionCount > 0 && ($contributionsPage * $contributionsLimit) >= $contributionCount) $contributionsPage = max(0, (int) ceil($contributionCount / $contributionsLimit) - 1);
 	$contributions = inventaireplusFetchRecentContributions($db, (int) $session->rowid, $contributionsLimit, $contributionsPage * $contributionsLimit, $contributionsFilters);
 }
-$controlStorageAvailable = inventaireplusControlStorageAvailable($db);
 $controlReport = ($session && $controlStorageAvailable ? inventaireplusFetchLatestControlReport($db, (int) $session->rowid) : null);
+$verificationStorageAvailable = inventaireplusVerificationStorageAvailable($db);
+$verificationCount = 0;
+$verificationLines = array();
+$verificationDataset = null;
+$verificationReport = ($controlReport && $verificationStorageAvailable ? inventaireplusFetchLatestVerificationReport($db, (int) $controlReport->rowid) : null);
+if ($view === 'verification' && $controlReport && (int) $controlReport->status !== 2 && $verificationStorageAvailable) {
+	$verificationCount = inventaireplusCountVerificationLines($db, (int) $controlReport->rowid, $verificationFilters);
+	if ($verificationCount > 0 && ($verificationPage * $verificationLimit) >= $verificationCount) $verificationPage = max(0, (int) ceil($verificationCount / $verificationLimit) - 1);
+	$verificationLines = inventaireplusFetchVerificationLines($db, (int) $controlReport->rowid, $verificationLimit, $verificationPage * $verificationLimit, $verificationFilters);
+	$verificationDataset = inventaireplusBuildVerificationDataset($db, $inventoryId, (int) $controlReport->rowid);
+}
 $campaignOpen = ($sessionStatus === 0 && (int) $object->status === Inventory::STATUS_VALIDATED);
-$controlReady = ($isAdmin || ($controlReport && (int) $controlReport->status === 1));
+$verificationReady = ($verificationReport && (int) $verificationReport->status === 0);
+$controlReady = ($isAdmin || ($controlReport && (int) $controlReport->status === 1 && $verificationReady));
 $scanKey = bin2hex(random_bytes(16));
 $form = new Form($db);
 $batchEnabled = isModEnabled('productbatch');
@@ -249,8 +340,20 @@ $contributionsArrayFields = array(
 	'contrib_batch' => array('label' => 'Batch', 'checked' => 1, 'enabled' => $batchEnabled, 'position' => 50),
 	'contrib_qty' => array('label' => 'Qty', 'checked' => 1, 'position' => 60),
 );
+$verificationArrayFields = array(
+	'verification_order' => array('label' => 'No.', 'checked' => 1, 'position' => 10),
+	'verification_zone' => array('label' => 'InventoryPlusCollaborativeZone', 'checked' => 1, 'position' => 20),
+	'verification_ref' => array('label' => 'Ref', 'checked' => 1, 'position' => 30),
+	'verification_label' => array('label' => 'Label', 'checked' => 1, 'position' => 40),
+	'verification_batch' => array('label' => 'Batch', 'checked' => 1, 'enabled' => $batchEnabled, 'position' => 50),
+	'verification_first' => array('label' => 'InventoryPlusCollaborativeFirstCountQty', 'checked' => 1, 'position' => 60),
+	'verification_verified' => array('label' => 'InventoryPlusCollaborativeVerifiedQty', 'checked' => 1, 'position' => 70),
+	'verification_difference' => array('label' => 'InventoryPlusCollaborativeControlDifference', 'checked' => 1, 'position' => 80),
+	'verification_verifier' => array('label' => 'InventoryPlusCollaborativeVerifier', 'checked' => 1, 'position' => 90),
+);
 $totalsSelectedFields = $form->multiSelectArrayWithCheckbox('selectedfields_totals', $totalsArrayFields, 'inventaireplus_collaborative_totals', getDolGlobalString('MAIN_CHECKBOX_LEFT_COLUMN'));
 $contributionsSelectedFields = $form->multiSelectArrayWithCheckbox('selectedfields_contributions', $contributionsArrayFields, 'inventaireplus_collaborative_contributions', getDolGlobalString('MAIN_CHECKBOX_LEFT_COLUMN'));
+$verificationSelectedFields = $form->multiSelectArrayWithCheckbox('selectedfields_verification', $verificationArrayFields, 'inventaireplus_collaborative_verification', getDolGlobalString('MAIN_CHECKBOX_LEFT_COLUMN'));
 $formConfirm = '';
 if ($action === 'confirm_consolidate' && $canConsolidate && $campaignOpen) {
 	$confirmConsolidation = $langs->trans('InventoryPlusCollaborativeConfirmConsolidate');
@@ -325,6 +428,7 @@ if ($controlReport) {
 
 $viewHead = array(
 	array($_SERVER['PHP_SELF'].'?id='.$inventoryId.'&view=count', $langs->trans('InventoryPlusCollaborativeCountingTab'), 'count'),
+	array($_SERVER['PHP_SELF'].'?id='.$inventoryId.'&view=verification', $langs->trans('InventoryPlusCollaborativeVerificationTab'), 'verification'),
 	array($_SERVER['PHP_SELF'].'?id='.$inventoryId.'&view=control', $langs->trans('InventoryPlusCollaborativeControlTab'), 'control'),
 );
 print dol_get_fiche_head($viewHead, $view, '', -1);
@@ -526,6 +630,128 @@ if ($view === 'count') {
 		print '</tr>';
 	}
 	print '</table></div></form>';
+} elseif ($view === 'verification') {
+	print load_fiche_titre($langs->trans('InventoryPlusCollaborativeVerification'), '', 'check');
+	print '<div class="info">'.$langs->trans('InventoryPlusCollaborativeVerificationHelp').'</div>';
+	if (!$verificationStorageAvailable) {
+		print '<div class="warning">'.$langs->trans('InventoryPlusCollaborativeVerificationStorageMissing').'</div>';
+	} elseif (!$controlReport || (int) $controlReport->status === 2) {
+		print '<div class="warning">'.$langs->trans('InventoryPlusCollaborativeVerificationNoControl').'</div>';
+	} else {
+		$stockDirOutput = (!empty($conf->stock->multidir_output[$conf->entity]) ? $conf->stock->multidir_output[$conf->entity] : $conf->stock->dir_output);
+		$blindPdfPath = preg_replace('/controle_contributions_/', 'second_comptage_', $controlReport->file_path, 1);
+		$blindXlsxPath = preg_replace('/\.pdf$/i', '.xlsx', $blindPdfPath);
+		$blindDocuments = '';
+		if ($blindPdfPath !== $controlReport->file_path && is_readable($stockDirOutput.'/movement/'.$blindPdfPath)) {
+			$blindDocuments .= '<a class="reposition marginrightonly" href="'.dol_escape_htmltag(DOL_URL_ROOT.'/document.php?modulepart=movement&file='.urlencode($blindPdfPath)).'" target="_blank" rel="noopener">'.img_picto($langs->trans('Download').' PDF', 'pdf').'</a>';
+		}
+		if ($blindXlsxPath !== $blindPdfPath && is_readable($stockDirOutput.'/movement/'.$blindXlsxPath)) {
+			$blindDocuments .= '<a class="reposition" href="'.dol_escape_htmltag(DOL_URL_ROOT.'/document.php?modulepart=movement&file='.urlencode($blindXlsxPath)).'" target="_blank" rel="noopener"><span class="far fa-file-excel" title="'.dol_escape_htmltag($langs->trans('Download').' Excel').'"></span></a>';
+		}
+		if ($blindDocuments !== '') print '<div class="fichecenter"><span class="opacitymedium">'.$langs->trans('InventoryPlusCollaborativeSecondCountBlankDocuments').' :</span> '.$blindDocuments.'</div>';
+		$verificationNavigationParameters = array_merge(array('id' => $inventoryId, 'view' => 'verification'), $verificationFilterParameters);
+		$verificationPager = inventaireplusBuildListPager($_SERVER['PHP_SELF'], $verificationNavigationParameters, 'verification_page', 'verification_limit', $verificationPage, $verificationLimit, $verificationCount, 250);
+		$verificationActionsOnLeft = (bool) getDolGlobalString('MAIN_CHECKBOX_LEFT_COLUMN');
+		print '<form id="inventaireplus-verification-form" method="POST" action="'.dol_escape_htmltag($_SERVER['PHP_SELF']).'">';
+		print '<input type="hidden" name="token" value="'.newToken().'">';
+		print '<input type="hidden" name="id" value="'.$inventoryId.'">';
+		print '<input type="hidden" name="view" value="verification">';
+		print '<input type="hidden" name="control_id" value="'.((int) $controlReport->rowid).'">';
+		print '<input type="hidden" name="formfilteraction" value="list">';
+		print '<input type="hidden" name="list_context" value="verification">';
+		print '<input type="hidden" name="selectedfields_context" value="inventaireplus_collaborative_verification">';
+		print '<input type="hidden" name="verification_page" value="'.$verificationPage.'">';
+		print '<input type="hidden" name="expected_verification_lines" value="'.count($verificationLines).'">';
+		$verificationHiddenFilters = array(
+			'verification_order' => array('search_verification_order', $searchVerificationOrder),
+			'verification_zone' => array('search_verification_zone', $searchVerificationZone),
+			'verification_ref' => array('search_verification_ref', $searchVerificationRef),
+			'verification_label' => array('search_verification_label', $searchVerificationLabel),
+			'verification_batch' => array('search_verification_batch', $searchVerificationBatch),
+			'verification_first' => array('search_verification_first', $searchVerificationFirst),
+			'verification_verified' => array('search_verification_verified', $searchVerificationVerified),
+			'verification_difference' => array('search_verification_difference', $searchVerificationDifference),
+			'verification_verifier' => array('search_verification_verifier', $searchVerificationVerifier),
+		);
+		foreach ($verificationHiddenFilters as $fieldKey => $filter) {
+			if (empty($verificationArrayFields[$fieldKey]['checked']) && (string) $filter[1] !== '') print '<input type="hidden" name="'.$filter[0].'" value="'.dol_escape_htmltag($filter[1]).'">';
+		}
+		foreach ($verificationLines as $line) {
+			$verifiedValue = ($line->qty_verified === null ? '' : price2num($line->qty_verified, 'MS'));
+			print '<input type="hidden" name="verification_line_ids[]" value="'.((int) $line->rowid).'">';
+			print '<input type="hidden" name="verification_version_'.((int) $line->rowid).'" value="'.((int) $line->version).'">';
+			if (empty($verificationArrayFields['verification_verified']['checked'])) print '<input type="hidden" name="verified_qty_'.((int) $line->rowid).'" value="'.dol_escape_htmltag($verifiedValue).'">';
+		}
+		print_barre_liste($langs->trans('InventoryPlusCollaborativeVerificationLines'), $verificationPage, $_SERVER['PHP_SELF'], '', '', '', '', count($verificationLines), $verificationCount, 'list', 0, '', '', 0, -1, 1, 0, $verificationPager);
+		print '<div class="div-table-responsive">';
+		print '<table class="noborder centpercent">';
+		print '<tr class="liste_titre_filter">';
+		if ($verificationActionsOnLeft) print '<td class="liste_titre center maxwidthsearch">'.$form->showFilterButtons('left').'</td>';
+		if (!empty($verificationArrayFields['verification_order']['checked'])) print '<td class="liste_titre center"><input class="flat width50 center" type="text" name="search_verification_order" value="'.dol_escape_htmltag($searchVerificationOrder).'"></td>';
+		if (!empty($verificationArrayFields['verification_zone']['checked'])) print '<td class="liste_titre"><input class="flat maxwidth100" type="text" name="search_verification_zone" value="'.dol_escape_htmltag($searchVerificationZone).'"></td>';
+		if (!empty($verificationArrayFields['verification_ref']['checked'])) print '<td class="liste_titre"><input class="flat maxwidth100" type="text" name="search_verification_ref" value="'.dol_escape_htmltag($searchVerificationRef).'"></td>';
+		if (!empty($verificationArrayFields['verification_label']['checked'])) print '<td class="liste_titre"><input class="flat maxwidth150" type="text" name="search_verification_label" value="'.dol_escape_htmltag($searchVerificationLabel).'"></td>';
+		if (!empty($verificationArrayFields['verification_batch']['checked'])) print '<td class="liste_titre"><input class="flat maxwidth100" type="text" name="search_verification_batch" value="'.dol_escape_htmltag($searchVerificationBatch).'"></td>';
+		if (!empty($verificationArrayFields['verification_first']['checked'])) print '<td class="liste_titre right"><input class="flat width75 right" type="text" name="search_verification_first" value="'.dol_escape_htmltag($searchVerificationFirst).'"></td>';
+		if (!empty($verificationArrayFields['verification_verified']['checked'])) print '<td class="liste_titre right"><input class="flat width75 right" type="text" name="search_verification_verified" value="'.dol_escape_htmltag($searchVerificationVerified).'"></td>';
+		if (!empty($verificationArrayFields['verification_difference']['checked'])) print '<td class="liste_titre right"><input class="flat width75 right" type="text" name="search_verification_difference" value="'.dol_escape_htmltag($searchVerificationDifference).'"></td>';
+		if (!empty($verificationArrayFields['verification_verifier']['checked'])) print '<td class="liste_titre"><input class="flat maxwidth100" type="text" name="search_verification_verifier" value="'.dol_escape_htmltag($searchVerificationVerifier).'"></td>';
+		if (!$verificationActionsOnLeft) print '<td class="liste_titre center maxwidthsearch">'.$form->showFilterButtons().'</td>';
+		print '</tr>';
+		print '<tr class="liste_titre">';
+		if ($verificationActionsOnLeft) print '<th class="center maxwidthsearch">'.$verificationSelectedFields.'</th>';
+		if (!empty($verificationArrayFields['verification_order']['checked'])) print '<th class="center">'.$langs->trans('No.').'</th>';
+		if (!empty($verificationArrayFields['verification_zone']['checked'])) print '<th>'.$langs->trans('InventoryPlusCollaborativeZone').'</th>';
+		if (!empty($verificationArrayFields['verification_ref']['checked'])) print '<th>'.$langs->trans('Ref').'</th>';
+		if (!empty($verificationArrayFields['verification_label']['checked'])) print '<th>'.$langs->trans('Label').'</th>';
+		if (!empty($verificationArrayFields['verification_batch']['checked'])) print '<th>'.$langs->trans('Batch').'</th>';
+		if (!empty($verificationArrayFields['verification_first']['checked'])) print '<th class="right">'.$langs->trans('InventoryPlusCollaborativeFirstCountQty').'</th>';
+		if (!empty($verificationArrayFields['verification_verified']['checked'])) print '<th class="right">'.$langs->trans('InventoryPlusCollaborativeVerifiedQty').'</th>';
+		if (!empty($verificationArrayFields['verification_difference']['checked'])) print '<th class="right">'.$langs->trans('InventoryPlusCollaborativeControlDifference').'</th>';
+		if (!empty($verificationArrayFields['verification_verifier']['checked'])) print '<th>'.$langs->trans('InventoryPlusCollaborativeVerifier').'</th>';
+		if (!$verificationActionsOnLeft) print '<th class="center maxwidthsearch">'.$verificationSelectedFields.'</th>';
+		print '</tr>';
+		$verificationColumnCount = 1;
+		foreach ($verificationArrayFields as $field) if (!empty($field['checked'])) $verificationColumnCount++;
+		if (empty($verificationLines)) print '<tr><td colspan="'.$verificationColumnCount.'" class="opacitymedium">'.$langs->trans('None').'</td></tr>';
+		foreach ($verificationLines as $line) {
+			$verifiedValue = ($line->qty_verified === null ? '' : price2num($line->qty_verified, 'MS'));
+			$difference = ($line->qty_verified === null ? '' : price((float) $line->qty_verified - (float) $line->qty_first));
+			$verifierName = trim((string) $line->verifier_firstname.' '.(string) $line->verifier_lastname);
+			if ($verifierName === '') $verifierName = (string) $line->verifier_login;
+			$inputId = 'verified_qty_'.((int) $line->rowid);
+			print '<tr class="oddeven">';
+			if ($verificationActionsOnLeft) print '<td></td>';
+			if (!empty($verificationArrayFields['verification_order']['checked'])) print '<td class="center">'.((int) $line->line_order).'</td>';
+			if (!empty($verificationArrayFields['verification_zone']['checked'])) print '<td>'.dol_escape_htmltag($line->zone).'</td>';
+			if (!empty($verificationArrayFields['verification_ref']['checked'])) print '<td>'.dol_escape_htmltag($line->ref).'</td>';
+			if (!empty($verificationArrayFields['verification_label']['checked'])) print '<td>'.dol_escape_htmltag($line->label).'</td>';
+			if (!empty($verificationArrayFields['verification_batch']['checked'])) print '<td>'.dol_escape_htmltag($line->batch).'</td>';
+			if (!empty($verificationArrayFields['verification_first']['checked'])) print '<td class="right">'.price($line->qty_first).'</td>';
+			if (!empty($verificationArrayFields['verification_verified']['checked'])) {
+				print '<td class="right nowraponall"><input class="flat right width75 inventaireplus-verified-qty" id="'.$inputId.'" name="'.$inputId.'" value="'.dol_escape_htmltag($verifiedValue).'" inputmode="decimal" data-first="'.dol_escape_htmltag(price2num($line->qty_first, 'MS')).'"'.(!$campaignOpen ? ' readonly="readonly"' : '').'> ';
+				if ($campaignOpen) print '<a id="undochangesqty_'.((int) $line->rowid).'" href="#" class="undochangesqty reposition marginrightonly" data-target="'.$inputId.'" title="'.dol_escape_htmltag($langs->trans('Clear')).'"><span class="fas fa-eraser opacitymedium"></span></a>';
+				print '</td>';
+			}
+			if (!empty($verificationArrayFields['verification_difference']['checked'])) print '<td class="right inventaireplus-verification-difference">'.$difference.'</td>';
+			if (!empty($verificationArrayFields['verification_verifier']['checked'])) print '<td>'.dol_escape_htmltag($verifierName).'</td>';
+			if (!$verificationActionsOnLeft) print '<td></td>';
+			print '</tr>';
+		}
+		print '</table></div>';
+		print '</form>';
+
+		print '<div class="tabsAction">';
+		if ($campaignOpen && !empty($verificationLines)) print '<button class="butAction" type="submit" form="inventaireplus-verification-form" name="action" value="saveverification">'.$langs->trans('Save').'</button>';
+		if ($campaignOpen && $verificationDataset && !empty($verificationDataset['complete'])) {
+			print '<form class="inline-block" method="POST" action="'.dol_escape_htmltag($_SERVER['PHP_SELF']).'">';
+			print '<input type="hidden" name="token" value="'.newToken().'"><input type="hidden" name="action" value="buildverificationpdf"><input type="hidden" name="id" value="'.$inventoryId.'"><input type="hidden" name="view" value="verification"><input type="hidden" name="control_id" value="'.((int) $controlReport->rowid).'">';
+			print '<button class="butAction" type="submit">'.$langs->trans('InventoryPlusCollaborativeGenerateVerification').'</button></form>';
+		} elseif ($campaignOpen) {
+			print '<span class="butActionRefused classfortooltip" title="'.dol_escape_htmltag($langs->trans('InventoryPlusCollaborativeVerificationIncomplete')).'">'.$langs->trans('InventoryPlusCollaborativeGenerateVerification').'</span>';
+		}
+		print '</div>';
+	}
 } else {
 	print load_fiche_titre($langs->trans('InventoryPlusCollaborativeControl'), '', 'pdf');
 	print '<div class="info">'.$langs->trans('InventoryPlusCollaborativeControlHelp').'</div>';
@@ -534,13 +760,35 @@ if ($view === 'count') {
 	}
 	print '<div class="div-table-responsive">';
 	print '<table class="noborder centpercent">';
-	print '<tr class="liste_titre"><th>'.$langs->trans('InventoryPlusCollaborativeControlSequenceLabel').'</th><th>'.$langs->trans('Date').'</th><th>'.$langs->trans('Author').'</th><th class="right">'.$langs->trans('InventoryPlusCollaborativeScans').'</th><th>'.$langs->trans('InventoryPlusCollaborativeControlHash').'</th><th>'.$langs->trans('Status').'</th><th>'.$langs->trans('InventoryPlusCollaborativeController').'</th><th></th></tr>';
+	print '<tr class="liste_titre"><th>'.$langs->trans('InventoryPlusCollaborativeControlSequenceLabel').'</th><th>'.$langs->trans('Date').'</th><th>'.$langs->trans('Author').'</th><th class="right">'.$langs->trans('InventoryPlusCollaborativeScans').'</th><th>'.$langs->trans('InventoryPlusCollaborativeControlHash').'</th><th>'.$langs->trans('Status').'</th><th>'.$langs->trans('InventoryPlusCollaborativeController').'</th><th class="center">'.$langs->trans('InventoryPlusCollaborativeFirstCountDocuments').'</th><th class="center">'.$langs->trans('InventoryPlusCollaborativeSecondCountDocuments').'</th><th class="center">'.$langs->trans('InventoryPlusCollaborativeVerifiedResultDocuments').'</th></tr>';
 	if (!$controlReport) {
-		print '<tr><td colspan="8" class="opacitymedium">'.$langs->trans('None').'</td></tr>';
+		print '<tr><td colspan="10" class="opacitymedium">'.$langs->trans('None').'</td></tr>';
 	} else {
 		$documentUrl = DOL_URL_ROOT.'/document.php?modulepart=movement&file='.urlencode($controlReport->file_path);
+		$controlXlsxPath = preg_replace('/\.pdf$/i', '.xlsx', $controlReport->file_path);
+		$controlXlsxUrl = DOL_URL_ROOT.'/document.php?modulepart=movement&file='.urlencode($controlXlsxPath);
+		$firstDocuments = '<a class="reposition marginrightonly" href="'.dol_escape_htmltag($documentUrl).'" target="_blank" rel="noopener">'.img_picto($langs->trans('Download').' PDF', 'pdf').'</a>';
+		$stockDirOutput = (!empty($conf->stock->multidir_output[$conf->entity]) ? $conf->stock->multidir_output[$conf->entity] : $conf->stock->dir_output);
+		if (is_readable($stockDirOutput.'/movement/'.$controlXlsxPath)) $firstDocuments .= '<a class="reposition" href="'.dol_escape_htmltag($controlXlsxUrl).'" target="_blank" rel="noopener"><span class="far fa-file-excel" title="'.dol_escape_htmltag($langs->trans('Download').' Excel').'"></span></a>';
+		$blindPdfPath = preg_replace('/controle_contributions_/', 'second_comptage_', $controlReport->file_path, 1);
+		$blindXlsxPath = preg_replace('/\.pdf$/i', '.xlsx', $blindPdfPath);
+		$secondDocuments = '';
+		if ($blindPdfPath !== $controlReport->file_path && is_readable($stockDirOutput.'/movement/'.$blindPdfPath)) {
+			$secondDocuments .= '<a class="reposition marginrightonly" href="'.dol_escape_htmltag(DOL_URL_ROOT.'/document.php?modulepart=movement&file='.urlencode($blindPdfPath)).'" target="_blank" rel="noopener">'.img_picto($langs->trans('Download').' PDF', 'pdf').'</a>';
+		}
+		if ($blindXlsxPath !== $blindPdfPath && is_readable($stockDirOutput.'/movement/'.$blindXlsxPath)) {
+			$secondDocuments .= '<a class="reposition" href="'.dol_escape_htmltag(DOL_URL_ROOT.'/document.php?modulepart=movement&file='.urlencode($blindXlsxPath)).'" target="_blank" rel="noopener"><span class="far fa-file-excel" title="'.dol_escape_htmltag($langs->trans('Download').' Excel').'"></span></a>';
+		}
+		$verifiedDocuments = '';
+		if ($verificationReport && (int) $verificationReport->status === 0) {
+			$verificationPdfUrl = DOL_URL_ROOT.'/document.php?modulepart=movement&file='.urlencode($verificationReport->file_path);
+			$verificationXlsxPath = preg_replace('/\.pdf$/i', '.xlsx', $verificationReport->file_path);
+			$verificationXlsxUrl = DOL_URL_ROOT.'/document.php?modulepart=movement&file='.urlencode($verificationXlsxPath);
+			$verifiedDocuments = '<a class="reposition marginrightonly" href="'.dol_escape_htmltag($verificationPdfUrl).'" target="_blank" rel="noopener">'.img_picto($langs->trans('Download').' PDF', 'pdf').'</a>';
+			if (is_readable($stockDirOutput.'/movement/'.$verificationXlsxPath)) $verifiedDocuments .= '<a class="reposition" href="'.dol_escape_htmltag($verificationXlsxUrl).'" target="_blank" rel="noopener"><span class="far fa-file-excel" title="'.dol_escape_htmltag($langs->trans('Download').' Excel').'"></span></a>';
+		}
 		$controller = (!empty($controlReport->approval_login) ? dol_escape_htmltag($controlReport->approval_login).' - '.dol_print_date($db->jdate($controlReport->date_approval), 'dayhour') : '');
-		print '<tr class="oddeven"><td>'.((int) $controlReport->sequence).'</td><td>'.dol_print_date($db->jdate($controlReport->datec), 'dayhour').'</td><td>'.dol_escape_htmltag($controlReport->author_login).'</td><td class="right">'.((int) $controlReport->contribution_count).'</td><td><span class="small">'.dol_escape_htmltag(substr($controlReport->content_hash, 0, 16)).'...</span></td><td><span class="badge '.$controlStatusClass.'">'.$langs->trans($controlStatusLabel).'</span></td><td>'.$controller.'</td><td class="right"><a class="reposition" href="'.dol_escape_htmltag($documentUrl).'" target="_blank" rel="noopener">'.img_picto($langs->trans('Download'), 'pdf').'</a></td></tr>';
+		print '<tr class="oddeven"><td>'.((int) $controlReport->sequence).'</td><td>'.dol_print_date($db->jdate($controlReport->datec), 'dayhour').'</td><td>'.dol_escape_htmltag($controlReport->author_login).'</td><td class="right">'.((int) $controlReport->contribution_count).'</td><td><span class="small">'.dol_escape_htmltag(substr($controlReport->content_hash, 0, 16)).'...</span></td><td><span class="badge '.$controlStatusClass.'">'.$langs->trans($controlStatusLabel).'</span></td><td>'.$controller.'</td><td class="center nowraponall">'.$firstDocuments.'</td><td class="center nowraponall">'.$secondDocuments.'</td><td class="center nowraponall">'.$verifiedDocuments.'</td></tr>';
 	}
 	print '</table></div>';
 
@@ -564,7 +812,8 @@ if ($view === 'count') {
 		if ($controlReady) {
 			print '<a class="butAction" href="'.$_SERVER['PHP_SELF'].'?id='.$inventoryId.'&view=control&action=confirm_consolidate&token='.newToken().'">'.$langs->trans('InventoryPlusCollaborativeConsolidate').'</a>';
 		} else {
-			print '<span class="butActionRefused classfortooltip" title="'.dol_escape_htmltag($langs->trans('InventoryPlusCollaborativeControlRequired')).'">'.$langs->trans('InventoryPlusCollaborativeConsolidate').'</span>';
+			$consolidationRequirement = (!$controlReport || (int) $controlReport->status !== 1 ? 'InventoryPlusCollaborativeControlRequired' : 'InventoryPlusCollaborativeVerificationRequired');
+			print '<span class="butActionRefused classfortooltip" title="'.dol_escape_htmltag($langs->trans($consolidationRequirement)).'">'.$langs->trans('InventoryPlusCollaborativeConsolidate').'</span>';
 		}
 		print '</div>';
 	}
@@ -580,6 +829,26 @@ jQuery(function() {
 	var product = jQuery("#product_token");
 	var productSearch = jQuery("#search_product_token");
 	var productControl = productSearch.length ? productSearch : product;
+	function updateVerificationDifference(input) {
+		var value = jQuery(input).val().trim();
+		var cell = jQuery(input).closest("tr").find(".inventaireplus-verification-difference");
+		if (value === "") {
+			cell.text("");
+			return;
+		}
+		var verified = Number(value.replace(/\s/g, "").replace(",", "."));
+		var first = Number(String(jQuery(input).data("first")).replace(/\s/g, "").replace(",", "."));
+		cell.text(Number.isFinite(verified) && Number.isFinite(first) ? (verified - first).toLocaleString(undefined, {maximumFractionDigits: 8}) : "");
+	}
+	jQuery(".inventaireplus-verified-qty").on("input change", function() { updateVerificationDifference(this); });
+	jQuery("#inventaireplus-verification-form .undochangesqty").on("click", function(event) {
+		event.preventDefault();
+		var target = document.getElementById(jQuery(this).data("target"));
+		if (target) {
+			target.value = "";
+			jQuery(target).trigger("input").trigger("focus");
+		}
+	});
 	if (!form.length) return;
 
 	var storageSuffix = "_'.((int) $inventoryId).'_'.((int) $user->id).'";
