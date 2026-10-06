@@ -1,5 +1,15 @@
 # CHANGELOG MODULE INVENTAIREPLUS FOR [DOLIBARR ERP CRM](https://www.dolibarr.org)
 
+## 1.2.0 - 2026-10-06
+
+- Split collaborative counting and four-eyes control into native Dolibarr tabs.
+- Keep users on the appropriate view after contribution, approval and consolidation actions.
+- Move control-sheet generation, approval and consolidation actions to the control tab.
+- Paginate collaborative totals at database level for large inventories.
+- Load totals and recent contributions only on the counting tab.
+- Preserve native confirmations, CSRF protection and transactional consolidation rules.
+- Improve the counting form spacing without introducing duplicate tab borders.
+
 ## 1.1.1 - 2026-10-01
 
 - Replace the collaborative count product input with the native Dolibarr product selector.
