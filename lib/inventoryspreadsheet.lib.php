@@ -34,11 +34,13 @@ function inventaireplusWriteControlSpreadsheet($dataset, $sequence, $dirOutput, 
 	$headers = array_merge($headers, array('InventoryPlusCollaborativeFirstCountQty', 'InventoryPlusCollaborativeVerifiedQty', 'InventoryPlusCollaborativeControlDifference', 'InventoryPlusCollaborativeObservation'));
 	$rows = array();
 	$number = 0;
-	foreach ($dataset['lines'] as $line) {
-		$number++;
-		$row = array($number, $line['zone'], dol_print_date($db->jdate($line['datec']), 'dayhour'), ($line['user_name'] !== '' ? $line['user_name'] : $line['user_login']), $line['product_ref'], $line['product_label']);
-		if (isModEnabled('productbatch')) $row[] = $line['batch'];
-		$rows[] = array_merge($row, array($blindCount ? '' : (float) $line['qty'], '', '', ''));
+	foreach ($dataset['zones'] as $zone) {
+		foreach ($zone['lines'] as $line) {
+			$number++;
+			$row = array($number, $line['zone'], dol_print_date($db->jdate($line['datec']), 'dayhour'), ($line['user_name'] !== '' ? $line['user_name'] : $line['user_login']), $line['product_ref'], $line['product_label']);
+			if (isModEnabled('productbatch')) $row[] = $line['batch'];
+			$rows[] = array_merge($row, array($blindCount ? '' : (float) $line['qty'], '', '', ''));
+		}
 	}
 	$inventoryRefSafe = ((int) $dataset['context']['inventory_id']).'_'.dol_sanitizeFileName(dol_trunc($dataset['context']['inventory_ref'], 64, 'right', 'UTF-8', 1));
 	$filename = ($blindCount ? 'second_comptage_' : 'controle_contributions_').$inventoryRefSafe.'_'.((int) $sequence).'_'.substr($dataset['content_hash'], 0, 12).'.xlsx';
@@ -62,11 +64,13 @@ function inventaireplusWriteVerificationSpreadsheet($dataset, $sequence, $dirOut
 	$headers = array_merge($headers, array('InventoryPlusCollaborativeFirstCountQty', 'InventoryPlusCollaborativeVerifiedQty', 'InventoryPlusCollaborativeControlDifference', 'InventoryPlusCollaborativeVerifier'));
 	$rows = array();
 	$number = 0;
-	foreach ($dataset['lines'] as $line) {
-		$number++;
-		$row = array($number, $line['zone'], $line['product_ref'], $line['product_label']);
-		if (isModEnabled('productbatch')) $row[] = $line['batch'];
-		$rows[] = array_merge($row, array((float) $line['qty_first'], (float) $line['qty_verified'], (float) $line['difference'], ($line['verifier_name'] !== '' ? $line['verifier_name'] : $line['verifier_login'])));
+	foreach ($dataset['zones'] as $zone) {
+		foreach ($zone['lines'] as $line) {
+			$number++;
+			$row = array($number, $line['zone'], $line['product_ref'], $line['product_label']);
+			if (isModEnabled('productbatch')) $row[] = $line['batch'];
+			$rows[] = array_merge($row, array((float) $line['qty_first'], (float) $line['qty_verified'], (float) $line['difference'], ($line['verifier_name'] !== '' ? $line['verifier_name'] : $line['verifier_login'])));
+		}
 	}
 	$inventoryRefSafe = ((int) $dataset['context']['inventory_id']).'_'.dol_sanitizeFileName(dol_trunc($dataset['context']['inventory_ref'], 64, 'right', 'UTF-8', 1));
 	$filename = 'comptage_verifie_'.$inventoryRefSafe.'_'.((int) $sequence).'_'.substr($dataset['content_hash'], 0, 12).'.xlsx';

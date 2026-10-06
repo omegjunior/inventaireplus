@@ -6,6 +6,7 @@
 - Protect verified quantities with atomic saves, optimistic locking and truncated-request detection.
 - Generate first-count control and quantity-free second-count sheets together in PDF and XLSX formats.
 - Generate separate verified second-count results with quantities, discrepancies and verifier traceability.
+- Keep PDF and XLSX line ordering identical by grouping contributions by zone while preserving insertion order within each zone.
 - Preserve four-eyes approval separation while allowing contributors to enter second-count quantities.
 - Require a current verified result before non-administrator consolidation.
 - Add second-count verification and report storage tables with their database constraints.
