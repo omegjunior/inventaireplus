@@ -1,0 +1,2 @@
+ALTER TABLE llx_inventaireplus_count_verification_report ADD UNIQUE INDEX uk_inventaireplus_verification_report_sequence (fk_control, sequence);
+ALTER TABLE llx_inventaireplus_count_verification_report ADD INDEX idx_inventaireplus_verification_report_status (fk_control, status);

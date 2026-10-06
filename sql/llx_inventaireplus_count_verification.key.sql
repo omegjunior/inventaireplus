@@ -1,0 +1,3 @@
+ALTER TABLE llx_inventaireplus_count_verification ADD UNIQUE INDEX uk_inventaireplus_verification_line (fk_control, fk_contribution);
+ALTER TABLE llx_inventaireplus_count_verification ADD INDEX idx_inventaireplus_verification_order (fk_control, line_order);
+ALTER TABLE llx_inventaireplus_count_verification ADD INDEX idx_inventaireplus_verification_inventoryline (fk_session, fk_inventorydet);

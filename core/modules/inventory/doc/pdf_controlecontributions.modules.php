@@ -23,6 +23,8 @@ class pdf_controlecontributions extends ModelePDFFactures
 	public $name = 'controlecontributions';
 	/** @var string */
 	public $description = 'Collaborative inventory contribution control sheet';
+	/** @var string */
+	protected $documentTitleKey = 'InventoryPlusCollaborativeControlSheet';
 	/** @var array<int,array<string,mixed>> */
 	public $cols = array();
 	/** @var float */
@@ -96,6 +98,8 @@ class pdf_controlecontributions extends ModelePDFFactures
 		$dataset = (!empty($parameters['dataset']) && is_array($parameters['dataset']) ? $parameters['dataset'] : array());
 		$sequence = (!empty($parameters['sequence']) ? (int) $parameters['sequence'] : 0);
 		$dir = (!empty($parameters['diroutput']) ? $parameters['diroutput'] : '');
+		$blindCount = !empty($parameters['blind_count']);
+		$this->documentTitleKey = ($blindCount ? 'InventoryPlusCollaborativeSecondCountBlindSheet' : 'InventoryPlusCollaborativeControlSheet');
 		if (empty($dataset['lines']) || empty($dataset['context']) || $sequence <= 0 || $dir === '') {
 			$this->error = 'Invalid control sheet parameters';
 			return 0;
@@ -106,7 +110,7 @@ class pdf_controlecontributions extends ModelePDFFactures
 		}
 
 		$inventoryRefSafe = ((int) $dataset['context']['inventory_id']).'_'.dol_sanitizeFileName(dol_trunc($dataset['context']['inventory_ref'], 64, 'right', 'UTF-8', 1));
-		$filename = 'controle_contributions_'.$inventoryRefSafe.'_'.$sequence.'_'.substr($dataset['content_hash'], 0, 12).'.pdf';
+		$filename = ($blindCount ? 'second_comptage_' : 'controle_contributions_').$inventoryRefSafe.'_'.$sequence.'_'.substr($dataset['content_hash'], 0, 12).'.pdf';
 		$file = $dir.'/'.$filename;
 		$pdf = pdf_getInstance($this->format);
 		if (class_exists('TCPDF')) {
@@ -118,7 +122,7 @@ class pdf_controlecontributions extends ModelePDFFactures
 		$pdf->SetFont(pdf_getPDFFont($outputlangs));
 		$pdf->SetDrawColor(80, 80, 80);
 		$pdf->SetTextColor(0, 0, 0);
-		$pdf->SetTitle($outputlangs->convToOutputCharset($outputlangs->transnoentities('InventoryPlusCollaborativeControlSheet').' '.$dataset['context']['inventory_ref']));
+		$pdf->SetTitle($outputlangs->convToOutputCharset($outputlangs->transnoentities($this->documentTitleKey).' '.$dataset['context']['inventory_ref']));
 		$pdf->SetCreator('InventairePlus '.DOL_VERSION);
 		$pdf->SetAuthor($mysoc->name.($user->id > 0 ? ' - '.$user->getFullName($outputlangs) : ''));
 		if (method_exists($pdf, 'AliasNbPages')) {
@@ -147,7 +151,7 @@ class pdf_controlecontributions extends ModelePDFFactures
 					'ref' => $line['product_ref'],
 					'label' => $line['product_label'],
 					'batch' => $line['batch'],
-					'qty' => price($line['qty']),
+					'qty' => ($blindCount ? '' : price($line['qty'])),
 					'verified' => '',
 					'difference' => '',
 					'observation' => '',
@@ -158,10 +162,12 @@ class pdf_controlecontributions extends ModelePDFFactures
 			}
 
 			if ($y + 6 > $bottomLimit) $y = $this->addPage($pdf, $dataset, $sequence, $outputlangs);
-			$pdf->SetFont('', 'B', 7);
-			$pdf->SetXY($this->marge_gauche, $y);
-			$pdf->MultiCell($this->tableWidth(), 6, $outputlangs->convToOutputCharset($outputlangs->transnoentities('Total').' '.$zone['label'].' : '.price($zone['total'])), 1, 'R', false, 0, '', '', true, 0, false, true, 6, 'M');
-			$y += 8;
+			if (!$blindCount) {
+				$pdf->SetFont('', 'B', 7);
+				$pdf->SetXY($this->marge_gauche, $y);
+				$pdf->MultiCell($this->tableWidth(), 6, $outputlangs->convToOutputCharset($outputlangs->transnoentities('Total').' '.$zone['label'].' : '.price($zone['total'])), 1, 'R', false, 0, '', '', true, 0, false, true, 6, 'M');
+				$y += 8;
+			}
 		}
 
 		if ($y + 27 > $bottomLimit) $y = $this->addPage($pdf, $dataset, $sequence, $outputlangs, false);
@@ -209,7 +215,7 @@ class pdf_controlecontributions extends ModelePDFFactures
 		$pdf->SetTextColor(0, 0, 60);
 		$pdf->SetFont('', 'B', $defaultFontSize + 3);
 		$pdf->SetXY($titleX, $headerTop);
-		$pdf->MultiCell($titleWidth, 6, $outputlangs->convToOutputCharset($outputlangs->transnoentities('InventoryPlusCollaborativeControlSheet')), 0, 'R');
+		$pdf->MultiCell($titleWidth, 6, $outputlangs->convToOutputCharset($outputlangs->transnoentities($this->documentTitleKey)), 0, 'R');
 		$pdf->SetFont('', 'B', $defaultFontSize);
 		$pdf->SetXY($titleX, $headerTop + 8);
 		$pdf->MultiCell($titleWidth, 4, $outputlangs->convToOutputCharset($outputlangs->transnoentities('Ref').': '.$dataset['context']['inventory_ref']), 0, 'R');

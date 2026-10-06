@@ -237,20 +237,31 @@ class pdf_pointdecarts extends ModelePDFFactures
 		$pdf->MultiCell($titleWidth, 4, 'POINT DES ECARTS', 0, 'R');
 
 		$boxTop = 42;
-		$boxHeight = 24;
 		$boxWidth = $this->getTableWidth();
 		$pdf->SetTextColor(0, 0, 0);
-		$pdf->Rect($this->marge_gauche, $boxTop, $boxWidth, $boxHeight);
 		$pdf->SetFont('', '', $defaultFontSize - 1);
 		$inventoryRef = (!empty($context['inventory_ref']) ? $context['inventory_ref'] : 'INVENTORY-'.$context['inventory_id']);
 		$warehouseLabel = (!empty($context['warehouse_label']) ? $context['warehouse_label'] : (!empty($context['warehouse_ref']) ? $context['warehouse_ref'] : ''));
 		$documentDate = (!empty($context['document_date']) ? $context['document_date'] : null);
-		$pdf->SetXY($this->marge_gauche + 2, $boxTop + 3);
-		$pdf->MultiCell($boxWidth - 4, 4, $outputlangs->convToOutputCharset('REFERENCE INVENTAIRE : '.$inventoryRef), 0, 'L');
-		$pdf->SetXY($this->marge_gauche + 2, $boxTop + 9);
-		$pdf->MultiCell($boxWidth - 4, 4, $outputlangs->convToOutputCharset('ENTREPOT : '.$warehouseLabel), 0, 'L');
-		$pdf->SetXY($this->marge_gauche + 2, $boxTop + 15);
-		$pdf->MultiCell($boxWidth - 4, 4, $outputlangs->convToOutputCharset('DATE : '.($documentDate ? dol_print_date($this->db->jdate($documentDate), 'day') : '').'    HEURE : '.($documentDate ? dol_print_date($this->db->jdate($documentDate), 'hour') : '')), 0, 'L');
+		$textWidth = $boxWidth - 4;
+		$lineHeight = 4;
+		$inventoryText = $outputlangs->convToOutputCharset('REFERENCE INVENTAIRE : '.$inventoryRef);
+		$warehouseText = $outputlangs->convToOutputCharset('ENTREPOT : '.$warehouseLabel);
+		$dateText = $outputlangs->convToOutputCharset('DATE : '.($documentDate ? dol_print_date($this->db->jdate($documentDate), 'day') : '').'    HEURE : '.($documentDate ? dol_print_date($this->db->jdate($documentDate), 'hour') : ''));
+		$inventoryHeight = (method_exists($pdf, 'getNumLines') ? max(1, (int) $pdf->getNumLines($inventoryText, $textWidth)) * $lineHeight : $lineHeight);
+		$warehouseHeight = (method_exists($pdf, 'getNumLines') ? max(1, (int) $pdf->getNumLines($warehouseText, $textWidth)) * $lineHeight : $lineHeight);
+		$dateHeight = (method_exists($pdf, 'getNumLines') ? max(1, (int) $pdf->getNumLines($dateText, $textWidth)) * $lineHeight : $lineHeight);
+		$inventoryTop = $boxTop + 3;
+		$warehouseTop = $inventoryTop + $inventoryHeight + 2;
+		$dateTop = $warehouseTop + $warehouseHeight + 2;
+		$boxHeight = ($dateTop - $boxTop) + $dateHeight + 3;
+		$pdf->Rect($this->marge_gauche, $boxTop, $boxWidth, $boxHeight);
+		$pdf->SetXY($this->marge_gauche + 2, $inventoryTop);
+		$pdf->MultiCell($textWidth, $lineHeight, $inventoryText, 0, 'L');
+		$pdf->SetXY($this->marge_gauche + 2, $warehouseTop);
+		$pdf->MultiCell($textWidth, $lineHeight, $warehouseText, 0, 'L');
+		$pdf->SetXY($this->marge_gauche + 2, $dateTop);
+		$pdf->MultiCell($textWidth, $lineHeight, $dateText, 0, 'L');
 
 		return ($boxTop + $boxHeight + 6);
 	}
