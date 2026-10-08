@@ -1,0 +1,2 @@
+ALTER TABLE llx_inventaireplus_warehouse_migration_line ADD UNIQUE INDEX uk_inventaireplus_warehouse_migration_line_source (fk_migration, fk_contribution_source);
+ALTER TABLE llx_inventaireplus_warehouse_migration_line ADD UNIQUE INDEX uk_inventaireplus_warehouse_migration_line_target (fk_migration, fk_contribution_target);

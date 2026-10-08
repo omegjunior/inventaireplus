@@ -4,7 +4,7 @@ CREATE TABLE IF NOT EXISTS llx_inventaireplus_count_session
     rowid                   integer AUTO_INCREMENT PRIMARY KEY,
     entity                  integer DEFAULT 1 NOT NULL,
     fk_inventory            integer NOT NULL,
-    status                  smallint DEFAULT 0 NOT NULL,
+    status                  smallint DEFAULT 0 NOT NULL, -- 0=open, 1=consolidated, 2=reserved/closed, 3=abandoned after warehouse correction
     datec                   datetime NOT NULL,
     tms                     timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     fk_user_author          integer NOT NULL,

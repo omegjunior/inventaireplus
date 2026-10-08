@@ -12,6 +12,7 @@
 - Require a current verified result before non-administrator consolidation.
 - Add second-count verification and report storage tables with their database constraints.
 - Prevent long warehouse descriptions from overlapping dates in inventory minutes and discrepancy PDFs.
+- Recreate an open inventory in the correct warehouse and atomically migrate its collaborative contributions while retaining the abandoned source for audit.
 
 ## 1.2.0 - 2026-10-06
 

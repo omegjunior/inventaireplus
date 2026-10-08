@@ -18,6 +18,7 @@ if (!$res && file_exists('../../../../main.inc.php')) {
 if (!$res) die('Include of main fails');
 
 require_once DOL_DOCUMENT_ROOT.'/core/class/html.form.class.php';
+require_once DOL_DOCUMENT_ROOT.'/product/class/html.formproduct.class.php';
 require_once DOL_DOCUMENT_ROOT.'/product/inventory/class/inventory.class.php';
 require_once DOL_DOCUMENT_ROOT.'/custom/inventaireplus/lib/inventorycollaborative.lib.php';
 
@@ -173,8 +174,9 @@ $canReadInventory = ($isAdmin || $user->hasRight('stock', 'lire') || $user->hasR
 $canCount = $canReadInventory && $user->hasRight('inventaireplus', 'collaborativecount', 'write');
 $canConsolidate = ($isAdmin || ($canReadInventory && $user->hasRight('inventaireplus', 'collaborativecount', 'consolidate') && ($user->hasRight('stock', 'inventory_advance', 'write') || $user->hasRight('stock', 'mouvement', 'creer') || $user->hasRight('stock', 'creer'))));
 $canControl = ($isAdmin || ($canReadInventory && $user->hasRight('inventaireplus', 'collaborativecount', 'control')));
-if (!$canCount && !$canConsolidate && !$canControl) accessforbidden();
-if (!$viewProvided && !$canCount && ($canConsolidate || $canControl)) $view = 'control';
+$canReassignWarehouse = ($isAdmin || ($canReadInventory && $user->hasRight('inventaireplus', 'collaborativecount', 'reassign') && ($user->hasRight('stock', 'inventory_advance', 'write') || $user->hasRight('stock', 'creer'))));
+if (!$canCount && !$canConsolidate && !$canControl && !$canReassignWarehouse) accessforbidden();
+if (!$viewProvided && !$canCount && ($canConsolidate || $canControl || $canReassignWarehouse)) $view = 'control';
 if ($view === 'verification' && !$canControl) accessforbidden();
 
 $object = new Inventory($db);
@@ -228,6 +230,23 @@ if ($action === 'voidcontribution' && $confirm === 'yes' && ($canCount || $canCo
 	$redirectParameters = array_merge(array('id' => $inventoryId, 'view' => 'count', 'totals_page' => $totalsPage, 'totals_limit' => $totalsLimit, 'contributions_page' => $contributionsPage, 'contributions_limit' => $contributionsLimit), $countListFilterParameters);
 	header('Location: '.$_SERVER['PHP_SELF'].'?'.http_build_query($redirectParameters, '', '&'));
 	exit;
+}
+
+if ($action === 'reassignwarehouse' && $confirm === 'yes' && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && $canReassignWarehouse) {
+	$targetWarehouseId = GETPOSTINT('target_warehouse_id');
+	if (GETPOSTINT('physical_count_target_confirmed') !== 1) {
+		setEventMessages($langs->trans('InventoryPlusWarehouseMigrationPhysicalConfirmationRequired'), null, 'errors');
+	} else {
+		$result = inventaireplusReassignInventoryWarehouse($db, $user, $inventoryId, $targetWarehouseId);
+		if (!empty($result['ok'])) {
+			setEventMessages($langs->trans('InventoryPlusWarehouseMigrationSuccess', $result['contributions'], $result['target_ref']), null, 'mesgs');
+			header('Location: '.DOL_URL_ROOT.'/product/inventory/inventory.php?id='.((int) $result['target_inventory_id']));
+			exit;
+		}
+		$errorMessage = $langs->trans($result['error'], (!empty($result['details']) ? $result['details'] : ''));
+		setEventMessages($errorMessage, null, 'errors');
+	}
+	$action = '';
 }
 
 if ($action === 'consolidate' && $confirm === 'yes' && $canConsolidate) {
@@ -322,6 +341,7 @@ $verificationReady = ($verificationReport && (int) $verificationReport->status =
 $controlReady = ($isAdmin || ($controlReport && (int) $controlReport->status === 1 && $verificationReady));
 $scanKey = bin2hex(random_bytes(16));
 $form = new Form($db);
+$formProduct = new FormProduct($db);
 $batchEnabled = isModEnabled('productbatch');
 $totalsArrayFields = array(
 	'totals_ref' => array('label' => 'Ref', 'checked' => 1, 'position' => 10),
@@ -395,6 +415,30 @@ if ($action === 'confirm_consolidate' && $canConsolidate && $campaignOpen) {
 		0,
 		1
 	);
+} elseif ($action === 'confirm_reassignwarehouse' && $canReassignWarehouse && $campaignOpen) {
+	$formQuestions = array(
+		array(
+			'type' => 'other',
+			'name' => 'target_warehouse_id',
+			'label' => $langs->trans('InventoryPlusWarehouseMigrationTargetWarehouse'),
+			'value' => $formProduct->selectWarehouses(GETPOSTINT('target_warehouse_id'), 'target_warehouse_id', 'warehouseopen,warehouseinternal', 1, 0, 0, '', 0, 0, array(), 'minwidth300'),
+		),
+		array(
+			'type' => 'other',
+			'name' => 'physical_count_target_confirmed',
+			'label' => $langs->trans('Confirmation'),
+			'value' => '<label><input id="physical_count_target_confirmed" type="checkbox" name="physical_count_target_confirmed" value="1" required> '.$langs->trans('InventoryPlusWarehouseMigrationPhysicalConfirmation').'</label>',
+		),
+	);
+	$formConfirm = $form->formconfirm(
+		$_SERVER['PHP_SELF'].'?id='.$inventoryId.'&view=control',
+		$langs->trans('InventoryPlusWarehouseMigrationAction'),
+		$langs->trans('InventoryPlusWarehouseMigrationConfirm'),
+		'reassignwarehouse',
+		$formQuestions,
+		0,
+		0
+	);
 }
 
 /*
@@ -406,11 +450,12 @@ llxHeader('', $title, '', '', 0, 0, array(), array(), '', 'mod-inventaireplus pa
 print $formConfirm;
 
 print load_fiche_titre($title, '<a href="'.DOL_URL_ROOT.'/product/inventory/inventory.php?id='.$inventoryId.'">'.$langs->trans('BackToInventory').'</a>', 'barcode');
+$sessionStatusLabel = ($sessionStatus === 0 ? 'InventoryPlusCollaborativeOpen' : ($sessionStatus === 3 ? 'InventoryPlusWarehouseMigrationAbandonedStatus' : 'InventoryPlusCollaborativeClosed'));
 print '<div class="fichecenter">';
 print '<table class="border centpercent tableforfield">';
 print '<tr><td class="titlefield">'.$langs->trans('Ref').'</td><td>'.dol_escape_htmltag($object->ref).'</td></tr>';
 print '<tr><td>'.$langs->trans('Label').'</td><td>'.dol_escape_htmltag($object->title).'</td></tr>';
-print '<tr><td>'.$langs->trans('Status').'</td><td>'.(($sessionStatus === 0) ? $langs->trans('InventoryPlusCollaborativeOpen') : $langs->trans('InventoryPlusCollaborativeClosed')).'</td></tr>';
+print '<tr><td>'.$langs->trans('Status').'</td><td>'.$langs->trans($sessionStatusLabel).'</td></tr>';
 print '</table>';
 print '</div><br>';
 
@@ -815,6 +860,12 @@ if ($view === 'count') {
 			$consolidationRequirement = (!$controlReport || (int) $controlReport->status !== 1 ? 'InventoryPlusCollaborativeControlRequired' : 'InventoryPlusCollaborativeVerificationRequired');
 			print '<span class="butActionRefused classfortooltip" title="'.dol_escape_htmltag($langs->trans($consolidationRequirement)).'">'.$langs->trans('InventoryPlusCollaborativeConsolidate').'</span>';
 		}
+		print '</div>';
+	}
+
+	if ($canReassignWarehouse && $campaignOpen) {
+		print '<div class="tabsAction">';
+		print '<a class="butActionDelete" href="'.$_SERVER['PHP_SELF'].'?id='.$inventoryId.'&view=control&action=confirm_reassignwarehouse&token='.newToken().'">'.$langs->trans('InventoryPlusWarehouseMigrationAction').'</a>';
 		print '</div>';
 	}
 }

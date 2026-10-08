@@ -1,0 +1,3 @@
+ALTER TABLE llx_inventaireplus_warehouse_migration ADD UNIQUE INDEX uk_inventaireplus_warehouse_migration_source (entity, fk_inventory_source);
+ALTER TABLE llx_inventaireplus_warehouse_migration ADD UNIQUE INDEX uk_inventaireplus_warehouse_migration_target (entity, fk_inventory_target);
+ALTER TABLE llx_inventaireplus_warehouse_migration ADD INDEX idx_inventaireplus_warehouse_migration_sessions (fk_session_source, fk_session_target);
