@@ -203,8 +203,16 @@ class ActionsInventairePlus extends CommonHookActions
 		}
 		if (!$this->hasHookContext($parameters, $hookmanager, 'inventorycard')) return 0;
 		$langs->loadLangs(array('stocks', 'inventaireplus@inventaireplus'));
-		if (in_array($action, array('record', 'update'), true) && !empty($object->id)) {
+		if (!empty($object->id)) {
 			require_once DOL_DOCUMENT_ROOT.'/custom/inventaireplus/lib/inventorycollaborative.lib.php';
+			$warehouseMigration = inventaireplusFetchWarehouseMigration($this->db, (int) $object->id);
+			if ($warehouseMigration && in_array($action, array('validate', 'confirm_validate', 'setdraft', 'confirm_setdraft', 'delete', 'confirm_delete', 'update', 'record'), true)) {
+				setEventMessages($langs->trans('InventoryPlusWarehouseMigrationSourceLocked', $warehouseMigration->target_ref), null, 'errors');
+				$action = '';
+				return 1;
+			}
+		}
+		if (in_array($action, array('record', 'update'), true) && !empty($object->id)) {
 			$closingAllowed = ($action === 'update')
 				? inventaireplusReserveInventoryForClosing($this->db, (int) $object->id, $user)
 				: !inventaireplusHasOpenCollaborativeCount($this->db, (int) $object->id);
@@ -727,6 +735,13 @@ class ActionsInventairePlus extends CommonHookActions
 		}
 		if (!$this->hasHookContext($parameters, $hookmanager, 'inventorycard')) return 0;
 		if (empty($object) || !is_object($object) || empty($object->id) || empty($object->element) || $object->element !== 'inventory') return 0;
+		require_once DOL_DOCUMENT_ROOT.'/custom/inventaireplus/lib/inventorycollaborative.lib.php';
+		$warehouseMigration = inventaireplusFetchWarehouseMigration($this->db, (int) $object->id);
+		if ($warehouseMigration) {
+			$targetUrl = DOL_URL_ROOT.'/product/inventory/inventory.php?id='.((int) $warehouseMigration->fk_inventory_target);
+			print '<a class="butAction" href="'.$targetUrl.'">'.$langs->trans('InventoryPlusWarehouseMigrationOpenTarget', $warehouseMigration->target_ref).'</a>';
+			return 1;
+		}
 
 		$status = isset($object->status) ? (int) $object->status : -1;
 		$canReadInventory = ($user->hasRight('stock', 'lire') || $user->hasRight('stock', 'inventory_advance', 'read') || $user->hasRight('stock', 'inventory_advance', 'write'));

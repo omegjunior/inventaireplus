@@ -14,6 +14,210 @@
 require_once DOL_DOCUMENT_ROOT.'/product/inventory/class/inventory.class.php';
 
 /**
+ * Return whether warehouse-reassignment audit tables are installed.
+ *
+ * @param DoliDB $db Database handler
+ * @return bool
+ */
+function inventaireplusWarehouseMigrationStorageAvailable($db)
+{
+	return (bool) $db->DDLDescTable(MAIN_DB_PREFIX.'inventaireplus_warehouse_migration')
+		&& (bool) $db->DDLDescTable(MAIN_DB_PREFIX.'inventaireplus_warehouse_migration_line');
+}
+
+/**
+ * Fetch the migration for an inventory used as a source.
+ *
+ * @param DoliDB $db Database handler
+ * @param int $inventoryId Source inventory id
+ * @return object|null
+ */
+function inventaireplusFetchWarehouseMigration($db, $inventoryId)
+{
+	if (!inventaireplusWarehouseMigrationStorageAvailable($db)) return null;
+	$sql = 'SELECT m.*, i.ref AS target_ref FROM '.MAIN_DB_PREFIX.'inventaireplus_warehouse_migration AS m';
+	$sql .= ' INNER JOIN '.MAIN_DB_PREFIX.'inventory AS i ON i.rowid = m.fk_inventory_target AND i.entity = m.entity';
+	$sql .= ' WHERE m.entity = '.((int) getEntity('inventory')).' AND m.fk_inventory_source = '.((int) $inventoryId);
+	$resql = $db->query($sql);
+	return ($resql ? $db->fetch_object($resql) : null);
+}
+
+/**
+ * Build a unique reference for an inventory recreated in another warehouse.
+ *
+ * @param DoliDB $db Database handler
+ * @param string $sourceRef Source inventory reference
+ * @param int $warehouseId Target warehouse id
+ * @return string
+ */
+function inventaireplusBuildReassignedInventoryRef($db, $sourceRef, $warehouseId)
+{
+	$base = dol_substr(trim((string) $sourceRef), 0, 26).'-W'.((int) $warehouseId).'-'.dol_print_date(dol_now(), '%Y%m%d%H%M%S');
+	$base = dol_substr($base, 0, 48);
+	$ref = $base;
+	$suffix = 1;
+	do {
+		$sql = 'SELECT rowid FROM '.MAIN_DB_PREFIX.'inventory WHERE entity = '.((int) getEntity('inventory'))." AND ref = '".$db->escape($ref)."'";
+		$resql = $db->query($sql);
+		if ($resql && $db->num_rows($resql) === 0) return $ref;
+		$ending = '-'.$suffix++;
+		$ref = dol_substr($base, 0, 48 - dol_strlen($ending)).$ending;
+	} while ($suffix < 1000);
+
+	return '';
+}
+
+/**
+ * Atomically recreate an open inventory in another warehouse and copy its
+ * immutable collaborative contributions to the matching native lines.
+ *
+ * Quantities entered directly in inventorydet.qty_view, controls and verified
+ * counts are deliberately not migrated.
+ *
+ * @param DoliDB $db Database handler
+ * @param User $user Current user
+ * @param int $inventoryId Source inventory id
+ * @param int $targetWarehouseId Target warehouse id
+ * @return array<string,mixed>
+ */
+function inventaireplusReassignInventoryWarehouse($db, $user, $inventoryId, $targetWarehouseId)
+{
+	$entity = (int) getEntity('inventory');
+	$inventoryId = (int) $inventoryId;
+	$targetWarehouseId = (int) $targetWarehouseId;
+	if ($inventoryId <= 0 || $targetWarehouseId <= 0) return array('ok' => false, 'error' => 'InventoryPlusWarehouseMigrationInvalidRequest');
+	if (!inventaireplusWarehouseMigrationStorageAvailable($db)) return array('ok' => false, 'error' => 'InventoryPlusWarehouseMigrationStorageMissing');
+
+	$db->begin();
+	try {
+		$resql = $db->query('SELECT * FROM '.MAIN_DB_PREFIX.'inventory WHERE rowid = '.$inventoryId.' AND entity = '.$entity.' FOR UPDATE');
+		$source = ($resql ? $db->fetch_object($resql) : null);
+		if (!$source || (int) $source->status !== Inventory::STATUS_VALIDATED) throw new Exception('InventoryPlusWarehouseMigrationInventoryNotOpen');
+		if ((int) $source->fk_warehouse <= 0 || (int) $source->fk_warehouse === $targetWarehouseId) throw new Exception('InventoryPlusWarehouseMigrationInvalidWarehouse');
+
+		$resql = $db->query('SELECT rowid FROM '.MAIN_DB_PREFIX.'entrepot WHERE rowid = '.$targetWarehouseId.' AND entity IN ('.getEntity('stock').') AND statut = 1');
+		if (!$resql || !$db->fetch_object($resql)) throw new Exception('InventoryPlusWarehouseMigrationInvalidWarehouse');
+
+		$resql = $db->query('SELECT rowid, fk_inventory_target FROM '.MAIN_DB_PREFIX.'inventaireplus_warehouse_migration WHERE entity = '.$entity.' AND fk_inventory_source = '.$inventoryId.' FOR UPDATE');
+		$existingMigration = ($resql ? $db->fetch_object($resql) : null);
+		if ($existingMigration) return inventaireplusRollbackMigration($db, 'InventoryPlusWarehouseMigrationAlreadyDone', array('target_inventory_id' => (int) $existingMigration->fk_inventory_target));
+
+		$resql = $db->query('SELECT rowid, status FROM '.MAIN_DB_PREFIX.'inventaireplus_count_session WHERE entity = '.$entity.' AND fk_inventory = '.$inventoryId.' FOR UPDATE');
+		$sourceSession = ($resql ? $db->fetch_object($resql) : null);
+		if (!$sourceSession || (int) $sourceSession->status !== 0) throw new Exception('InventoryPlusWarehouseMigrationCampaignNotOpen');
+
+		$resql = $db->query('SELECT COUNT(*) AS movement_count FROM '.MAIN_DB_PREFIX.'inventorydet WHERE fk_inventory = '.$inventoryId.' AND fk_movement IS NOT NULL AND fk_movement > 0');
+		$movementRow = ($resql ? $db->fetch_object($resql) : null);
+		if (!$movementRow || (int) $movementRow->movement_count > 0) throw new Exception('InventoryPlusWarehouseMigrationMovementsExist');
+
+		$sql = 'SELECT COUNT(*) AS contribution_count FROM '.MAIN_DB_PREFIX.'inventaireplus_count_contribution';
+		$sql .= ' WHERE entity = '.$entity.' AND fk_session = '.((int) $sourceSession->rowid).' AND fk_inventory = '.$inventoryId;
+		$resql = $db->query($sql);
+		if (!$resql) throw new Exception('InventoryPlusCollaborativeDatabaseError');
+		$contributionCountRow = $db->fetch_object($resql);
+		$contributionCount = ($contributionCountRow ? (int) $contributionCountRow->contribution_count : 0);
+		if ($contributionCount <= 0) throw new Exception('InventoryPlusWarehouseMigrationNoContribution');
+
+		$sourceObject = new Inventory($db);
+		if ($sourceObject->fetch($inventoryId) <= 0) throw new Exception('InventoryPlusCollaborativeDatabaseError');
+		$targetRef = inventaireplusBuildReassignedInventoryRef($db, $sourceObject->ref, $targetWarehouseId);
+		if ($targetRef === '') throw new Exception('InventoryPlusWarehouseMigrationReferenceFailed');
+
+		$target = new Inventory($db);
+		$target->ref = $targetRef;
+		$target->title = dol_substr(trim((string) $sourceObject->title).' - correction entrepôt', 0, 255);
+		$target->fk_warehouse = $targetWarehouseId;
+		$target->fk_product = (int) $sourceObject->fk_product;
+		$target->categories_product = (is_array($sourceObject->categories_product) ? implode(',', array_map('intval', $sourceObject->categories_product)) : (string) $sourceObject->categories_product);
+		if (!empty($sourceObject->date_inventory)) $target->date_inventory = $sourceObject->date_inventory;
+		if ($target->create($user) <= 0) throw new Exception('InventoryPlusWarehouseMigrationCreateFailed');
+		if ($target->validate($user, 0, 0) <= 0) throw new Exception('InventoryPlusWarehouseMigrationCreateFailed');
+
+		$sql = 'SELECT fk_product, COALESCE(batch, \'\') AS batch, COUNT(*) AS line_count FROM '.MAIN_DB_PREFIX.'inventorydet';
+		$sql .= ' WHERE fk_inventory = '.((int) $target->id).' AND fk_warehouse = '.$targetWarehouseId;
+		$sql .= ' GROUP BY fk_product, COALESCE(batch, \'\') HAVING COUNT(*) > 1';
+		$resql = $db->query($sql);
+		if (!$resql) throw new Exception('InventoryPlusCollaborativeDatabaseError');
+		if ($db->fetch_object($resql)) throw new Exception('InventoryPlusWarehouseMigrationAmbiguousLine');
+
+		$missing = array();
+		$sql = 'SELECT c.fk_product, COALESCE(c.batch, \'\') AS batch, p.ref FROM '.MAIN_DB_PREFIX.'inventaireplus_count_contribution AS c';
+		$sql .= ' LEFT JOIN '.MAIN_DB_PREFIX.'inventorydet AS id ON id.fk_inventory = '.((int) $target->id).' AND id.fk_warehouse = '.$targetWarehouseId;
+		$sql .= ' AND id.fk_product = c.fk_product AND COALESCE(id.batch, \'\') = COALESCE(c.batch, \'\')';
+		$sql .= ' LEFT JOIN '.MAIN_DB_PREFIX.'product AS p ON p.rowid = c.fk_product';
+		$sql .= ' WHERE c.entity = '.$entity.' AND c.fk_session = '.((int) $sourceSession->rowid).' AND id.rowid IS NULL';
+		$sql .= ' GROUP BY c.fk_product, COALESCE(c.batch, \'\'), p.ref ORDER BY MIN(c.rowid) ASC'.$db->plimit(20, 0);
+		$resql = $db->query($sql);
+		if (!$resql) throw new Exception('InventoryPlusCollaborativeDatabaseError');
+		while ($missingLine = $db->fetch_object($resql)) {
+			$missing[] = (string) $missingLine->ref.((string) $missingLine->batch !== '' ? ' / '.(string) $missingLine->batch : '');
+		}
+		if (!empty($missing)) return inventaireplusRollbackMigration($db, 'InventoryPlusWarehouseMigrationMissingLines', array('details' => implode(', ', array_slice(array_values($missing), 0, 20))));
+
+		$now = dol_now();
+		$sql = 'INSERT INTO '.MAIN_DB_PREFIX.'inventaireplus_count_session (entity, fk_inventory, status, datec, fk_user_author) VALUES (';
+		$sql .= $entity.', '.((int) $target->id).", 0, '".$db->idate($now)."', ".((int) $user->id).')';
+		if (!$db->query($sql)) throw new Exception('InventoryPlusCollaborativeDatabaseError');
+		$targetSessionId = (int) $db->last_insert_id(MAIN_DB_PREFIX.'inventaireplus_count_session');
+
+		$sql = 'INSERT INTO '.MAIN_DB_PREFIX.'inventaireplus_warehouse_migration';
+		$sql .= ' (entity, fk_inventory_source, fk_inventory_target, fk_session_source, fk_session_target, fk_warehouse_source, fk_warehouse_target, contribution_count, datec, fk_user_author) VALUES (';
+		$sql .= $entity.', '.$inventoryId.', '.((int) $target->id).', '.((int) $sourceSession->rowid).', '.$targetSessionId.', '.((int) $source->fk_warehouse).', '.$targetWarehouseId.', '.$contributionCount.", '".$db->idate($now)."', ".((int) $user->id).')';
+		if (!$db->query($sql)) throw new Exception('InventoryPlusCollaborativeDatabaseError');
+		$migrationId = (int) $db->last_insert_id(MAIN_DB_PREFIX.'inventaireplus_warehouse_migration');
+
+		$sql = 'INSERT INTO '.MAIN_DB_PREFIX.'inventaireplus_count_contribution';
+		$sql .= ' (entity, fk_session, fk_inventory, fk_inventorydet, fk_warehouse, fk_product, batch, zone, qty, scan_key, active, datec, fk_user_author, date_void, fk_user_void)';
+		$sql .= ' SELECT '.$entity.', '.$targetSessionId.', '.((int) $target->id).', id.rowid, '.$targetWarehouseId.', c.fk_product, c.batch, c.zone, c.qty, c.scan_key, c.active, c.datec, c.fk_user_author, c.date_void, c.fk_user_void';
+		$sql .= ' FROM '.MAIN_DB_PREFIX.'inventaireplus_count_contribution AS c';
+		$sql .= ' INNER JOIN '.MAIN_DB_PREFIX.'inventorydet AS id ON id.fk_inventory = '.((int) $target->id).' AND id.fk_warehouse = '.$targetWarehouseId;
+		$sql .= ' AND id.fk_product = c.fk_product AND COALESCE(id.batch, \'\') = COALESCE(c.batch, \'\')';
+		$sql .= ' WHERE c.entity = '.$entity.' AND c.fk_session = '.((int) $sourceSession->rowid).' ORDER BY c.rowid ASC';
+		$resinsert = $db->query($sql);
+		if (!$resinsert || $db->affected_rows($resinsert) !== $contributionCount) throw new Exception('InventoryPlusWarehouseMigrationConcurrentUpdate');
+
+		$sql = 'INSERT INTO '.MAIN_DB_PREFIX.'inventaireplus_warehouse_migration_line (entity, fk_migration, fk_contribution_source, fk_contribution_target)';
+		$sql .= ' SELECT '.$entity.', '.$migrationId.', source.rowid, target.rowid';
+		$sql .= ' FROM '.MAIN_DB_PREFIX.'inventaireplus_count_contribution AS source';
+		$sql .= ' INNER JOIN '.MAIN_DB_PREFIX.'inventaireplus_count_contribution AS target ON target.fk_session = '.$targetSessionId.' AND target.scan_key = source.scan_key';
+		$sql .= ' WHERE source.fk_session = '.((int) $sourceSession->rowid).' ORDER BY source.rowid ASC';
+		$resinsert = $db->query($sql);
+		if (!$resinsert || $db->affected_rows($resinsert) !== $contributionCount) throw new Exception('InventoryPlusWarehouseMigrationConcurrentUpdate');
+
+		if (!$db->query('UPDATE '.MAIN_DB_PREFIX.'inventaireplus_count_control SET status = 2 WHERE fk_session = '.((int) $sourceSession->rowid).' AND status <> 2')) throw new Exception('InventoryPlusCollaborativeDatabaseError');
+		$sql = 'UPDATE '.MAIN_DB_PREFIX.'inventaireplus_count_verification_report SET status = 2 WHERE status <> 2 AND fk_control IN (';
+		$sql .= 'SELECT rowid FROM '.MAIN_DB_PREFIX.'inventaireplus_count_control WHERE fk_session = '.((int) $sourceSession->rowid).')';
+		if (!$db->query($sql)) throw new Exception('InventoryPlusCollaborativeDatabaseError');
+		$sql = 'UPDATE '.MAIN_DB_PREFIX.'inventaireplus_count_session SET status = 3, date_close = \''.$db->idate($now).'\', fk_user_close = '.((int) $user->id).' WHERE rowid = '.((int) $sourceSession->rowid).' AND status = 0';
+		$resupdate = $db->query($sql);
+		if (!$resupdate || $db->affected_rows($resupdate) !== 1) throw new Exception('InventoryPlusWarehouseMigrationConcurrentUpdate');
+		if ($sourceObject->setCanceled($user) <= 0) throw new Exception('InventoryPlusWarehouseMigrationCancelFailed');
+
+		$db->commit();
+		return array('ok' => true, 'target_inventory_id' => (int) $target->id, 'target_ref' => $targetRef, 'contributions' => $contributionCount);
+	} catch (Throwable $e) {
+		$db->rollback();
+		$error = $e->getMessage();
+		if (strpos($error, 'InventoryPlus') !== 0) $error = 'InventoryPlusCollaborativeDatabaseError';
+		return array('ok' => false, 'error' => $error);
+	}
+}
+
+/**
+ * Roll back a warehouse migration and return a structured error.
+ *
+ * @param DoliDB $db Database handler
+ * @param string $error Translation key
+ * @param array<string,mixed> $extra Extra result values
+ * @return array<string,mixed>
+ */
+function inventaireplusRollbackMigration($db, $error, array $extra = array())
+{
+	$db->rollback();
+	return array_merge(array('ok' => false, 'error' => $error), $extra);
+}
+
+/**
  * Return whether an inventory has an open collaborative campaign.
  *
  * @param DoliDB $db Database handler
