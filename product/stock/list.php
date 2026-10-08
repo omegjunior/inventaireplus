@@ -952,6 +952,20 @@ if ((in_array('builddoc', array_keys($arrayofmassactions)) || $hasWarehouseValua
 	$delallowed = $user->hasRight('stock', 'creer');
 
 	print $formfile->showdocuments('massfilesarea_stock', '', $filedir, $urlsource, 0, $delallowed, '', 1, 1, 0, 48, 1, $param, $title, '', '', '', null, $hidegeneratedfilelistifempty);
+	print '<script nonce="'.getNonce().'">' . "\n";
+	print 'document.addEventListener("DOMContentLoaded", function () {';
+	print 'document.querySelectorAll("#massfilesarea_stock_table a.documentdownload").forEach(function (downloadLink) {';
+	print 'var downloadUrl; try { downloadUrl = new URL(downloadLink.href, window.location.href); } catch (e) { return; }';
+	print 'var filename = downloadUrl.searchParams.get("file") || "";';
+	print 'if (!/^etat_valorisation_stock_[0-9]+_[0-9]{14}\\.pdf$/.test(filename) || downloadLink.parentNode.querySelector(".inventaireplus-generate-valuation-xlsx")) return;';
+	print 'var actionUrl = new URL(window.location.href);';
+	print 'actionUrl.searchParams.set("action", "buildwarehousevaluationxlsxinventaireplus");';
+	print 'actionUrl.searchParams.set("token", "'.dol_escape_js(newToken()).'");';
+	print 'actionUrl.searchParams.set("file", filename); actionUrl.searchParams.set("show_files", "1");';
+	print 'var excelLink = document.createElement("a"); excelLink.className = "inventaireplus-generate-valuation-xlsx marginleftonly reposition"; excelLink.href = actionUrl.toString(); excelLink.title = "'.dol_escape_js($langs->transnoentities('InventoryPlusGenerateWarehouseValuationExcel')).'";';
+	print 'excelLink.innerHTML = "<span class=\\"far fa-file-excel\\"></span>"; downloadLink.insertAdjacentElement("afterend", excelLink);';
+	print '}); });' . "\n";
+	print '</script>';
 }
 
 // End of page

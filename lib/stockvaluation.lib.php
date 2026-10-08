@@ -217,3 +217,139 @@ function inventaireplusBuildWarehouseValuationDataset($db, $conf, $warehouseId)
 	return $dataset;
 }
 
+/**
+ * Generate the spreadsheet matching a warehouse valuation PDF.
+ *
+ * @param DoliDB    $db Database handler
+ * @param Conf      $conf Dolibarr configuration
+ * @param int       $warehouseId Warehouse id
+ * @param string    $dirOutput Output directory
+ * @param string    $filename Output filename
+ * @param Translate $langs Output language
+ * @return array<string,mixed>
+ */
+function inventaireplusWriteWarehouseValuationSpreadsheet($db, $conf, $warehouseId, $dirOutput, $filename, $langs)
+{
+	$warehouseId = (int) $warehouseId;
+	if ($warehouseId <= 0 || !preg_match('/^etat_valorisation_stock_[0-9]+_[0-9]{14}\.xlsx$/', $filename)) {
+		return array('ok' => false, 'error' => 'InventoryPlusWarehouseValuationExcelInvalidRequest');
+	}
+
+	$sql = 'SELECT rowid, ref, ref AS label FROM '.MAIN_DB_PREFIX.'entrepot';
+	$sql .= ' WHERE rowid = '.$warehouseId.' AND entity IN ('.getEntity('stock').')';
+	$resql = $db->query($sql);
+	$warehouse = ($resql ? $db->fetch_object($resql) : null);
+	if (!$warehouse) return array('ok' => false, 'error' => 'InventoryPlusWarehouseValuationExcelInvalidRequest');
+
+	$dataset = inventaireplusBuildWarehouseValuationDataset($db, $conf, $warehouseId);
+	if (empty($dataset['rows'])) return array('ok' => false, 'error' => 'InventoryPlusWarehouseValuationExcelNoData');
+
+	require_once DOL_DOCUMENT_ROOT.'/includes/phpoffice/phpspreadsheet/src/autoloader.php';
+	require_once DOL_DOCUMENT_ROOT.'/includes/Psr/autoloader.php';
+	require_once PHPEXCELNEW_PATH.'Spreadsheet.php';
+	if (!class_exists('PhpOffice\\PhpSpreadsheet\\Spreadsheet') || !class_exists('PhpOffice\\PhpSpreadsheet\\Writer\\Xlsx')) {
+		return array('ok' => false, 'error' => 'SpreadsheetLibraryUnavailable');
+	}
+	if (!class_exists('ZipArchive')) return array('ok' => false, 'error' => 'ErrorPHPNeedModule');
+	if (!file_exists($dirOutput) && dol_mkdir($dirOutput) < 0) return array('ok' => false, 'error' => 'ErrorCanNotCreateDir');
+
+	$withBatch = isModEnabled('productbatch');
+	$headers = array('No.', 'Ref', 'Label');
+	if ($withBatch) {
+		$headers[] = 'Batch';
+		$headers[] = 'ExpiryDateInventairePlus';
+	}
+	$headers[] = 'PhysicalStock';
+	$headers[] = 'EstimatedStockValue';
+	$headers[] = 'EstimatedStockValueSell';
+	$columnCount = count($headers);
+	$lastColumn = \PhpOffice\PhpSpreadsheet\Cell\Coordinate::stringFromColumnIndex($columnCount);
+
+	$spreadsheet = new \PhpOffice\PhpSpreadsheet\Spreadsheet();
+	$spreadsheet->getProperties()->setCreator('InventairePlus '.DOL_VERSION)->setTitle($langs->transnoentities('WarehouseStockValuation'));
+	$sheet = $spreadsheet->getActiveSheet();
+	$sheet->setTitle(substr(preg_replace('/[\\\\\/\?\*\[\]:]/', ' ', $langs->transnoentities('WarehouseStockValuation')), 0, 31));
+	$sheet->setCellValueExplicit('A1', $langs->transnoentities('WarehouseStockValuation'), \PhpOffice\PhpSpreadsheet\Cell\DataType::TYPE_STRING);
+	$sheet->mergeCells('A1:'.$lastColumn.'1');
+	$warehouseLabel = (!empty($warehouse->label) ? $warehouse->label : $warehouse->ref);
+	$sheet->setCellValueExplicit('A2', $langs->transnoentities('Warehouse').': '.$warehouseLabel, \PhpOffice\PhpSpreadsheet\Cell\DataType::TYPE_STRING);
+	$sheet->setCellValueExplicit('A3', $langs->transnoentities('Date').': '.dol_print_date(dol_now(), 'dayhour'), \PhpOffice\PhpSpreadsheet\Cell\DataType::TYPE_STRING);
+	foreach ($headers as $index => $header) {
+		$sheet->setCellValueExplicitByColumnAndRow($index + 1, 5, $langs->transnoentities($header), \PhpOffice\PhpSpreadsheet\Cell\DataType::TYPE_STRING);
+	}
+
+	$rowNumber = 6;
+	$lineNumber = 1;
+	$subtotalRows = array();
+	foreach ($dataset['categories'] as $category) {
+		$categoryLabel = str_repeat('   ', (int) ($category['level'] ?? 0)).$category['label'];
+		$sheet->setCellValueExplicitByColumnAndRow(1, $rowNumber, $categoryLabel, \PhpOffice\PhpSpreadsheet\Cell\DataType::TYPE_STRING);
+		$sheet->mergeCells('A'.$rowNumber.':'.$lastColumn.$rowNumber);
+		$sheet->getStyle('A'.$rowNumber.':'.$lastColumn.$rowNumber)->getFont()->setBold(true);
+		$sheet->getStyle('A'.$rowNumber.':'.$lastColumn.$rowNumber)->getFill()->setFillType(\PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID)->getStartColor()->setARGB('FFE6E6E6');
+		$rowNumber++;
+
+		foreach ($category['rows'] as $row) {
+			$column = 1;
+			$sheet->setCellValueByColumnAndRow($column++, $rowNumber, $lineNumber++);
+			$sheet->setCellValueExplicitByColumnAndRow($column++, $rowNumber, (string) $row['product_ref'], \PhpOffice\PhpSpreadsheet\Cell\DataType::TYPE_STRING);
+			$sheet->setCellValueExplicitByColumnAndRow($column++, $rowNumber, (string) $row['product_label'], \PhpOffice\PhpSpreadsheet\Cell\DataType::TYPE_STRING);
+			if ($withBatch) {
+				$sheet->setCellValueExplicitByColumnAndRow($column++, $rowNumber, (string) $row['batch'], \PhpOffice\PhpSpreadsheet\Cell\DataType::TYPE_STRING);
+				$expiryDate = (!empty($row['sellby']) ? $row['sellby'] : (!empty($row['eatby']) ? $row['eatby'] : null));
+				$sheet->setCellValueExplicitByColumnAndRow($column++, $rowNumber, ($expiryDate ? dol_print_date($db->jdate($expiryDate), 'day') : ''), \PhpOffice\PhpSpreadsheet\Cell\DataType::TYPE_STRING);
+			}
+			$sheet->setCellValueByColumnAndRow($column++, $rowNumber, (float) $row['qty']);
+			$sheet->setCellValueByColumnAndRow($column++, $rowNumber, (float) $row['purchase_total_value']);
+			$sheet->setCellValueByColumnAndRow($column, $rowNumber, (float) $row['sell_total_value']);
+			$rowNumber++;
+		}
+
+		$subtotalRows[] = $rowNumber;
+		$purchaseColumn = $columnCount - 1;
+		$sellColumn = $columnCount;
+		$sheet->setCellValueExplicitByColumnAndRow(1, $rowNumber, 'TOTAL '.$categoryLabel, \PhpOffice\PhpSpreadsheet\Cell\DataType::TYPE_STRING);
+		$sheet->mergeCells('A'.$rowNumber.':'.\PhpOffice\PhpSpreadsheet\Cell\Coordinate::stringFromColumnIndex($columnCount - 2).$rowNumber);
+		$sheet->setCellValueByColumnAndRow($purchaseColumn, $rowNumber, (float) $category['total_purchase']);
+		$sheet->setCellValueByColumnAndRow($sellColumn, $rowNumber, (float) $category['total_sell']);
+		$rowNumber++;
+	}
+
+	$subtotalRows[] = $rowNumber;
+	$sheet->setCellValueExplicitByColumnAndRow(1, $rowNumber, 'TOTAL GLOBAL', \PhpOffice\PhpSpreadsheet\Cell\DataType::TYPE_STRING);
+	$sheet->mergeCells('A'.$rowNumber.':'.\PhpOffice\PhpSpreadsheet\Cell\Coordinate::stringFromColumnIndex($columnCount - 2).$rowNumber);
+	$sheet->setCellValueByColumnAndRow($columnCount - 1, $rowNumber, (float) $dataset['total_purchase']);
+	$sheet->setCellValueByColumnAndRow($columnCount, $rowNumber, (float) $dataset['total_sell']);
+	$lastRow = $rowNumber;
+
+	$sheet->getStyle('A1:'.$lastColumn.'1')->getFont()->setBold(true)->setSize(14);
+	$sheet->getStyle('A5:'.$lastColumn.'5')->getFont()->setBold(true)->getColor()->setARGB('FFFFFFFF');
+	$sheet->getStyle('A5:'.$lastColumn.'5')->getFill()->setFillType(\PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID)->getStartColor()->setARGB('FF2D4B73');
+	$sheet->getStyle('A5:'.$lastColumn.$lastRow)->getBorders()->getAllBorders()->setBorderStyle(\PhpOffice\PhpSpreadsheet\Style\Border::BORDER_THIN)->getColor()->setARGB('FFB7B7B7');
+	$sheet->getStyle('A5:'.$lastColumn.$lastRow)->getAlignment()->setVertical(\PhpOffice\PhpSpreadsheet\Style\Alignment::VERTICAL_CENTER);
+	$sheet->getStyle('A5:'.$lastColumn.'5')->getAlignment()->setWrapText(true);
+	foreach ($subtotalRows as $subtotalRow) {
+		$sheet->getStyle('A'.$subtotalRow.':'.$lastColumn.$subtotalRow)->getFont()->setBold(true);
+		$sheet->getStyle('A'.$subtotalRow.':'.$lastColumn.$subtotalRow)->getFill()->setFillType(\PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID)->getStartColor()->setARGB('FFF0F0F0');
+	}
+	$sheet->getStyle(\PhpOffice\PhpSpreadsheet\Cell\Coordinate::stringFromColumnIndex($columnCount - 2).'6:'.$lastColumn.$lastRow)->getNumberFormat()->setFormatCode('#,##0.00');
+	$sheet->freezePane('A6');
+	$columnWidths = ($withBatch ? array(8, 18, 55, 20, 16, 14, 20, 20) : array(8, 18, 55, 14, 20, 20));
+	foreach ($columnWidths as $columnIndex => $columnWidth) {
+		$sheet->getColumnDimension(\PhpOffice\PhpSpreadsheet\Cell\Coordinate::stringFromColumnIndex($columnIndex + 1))->setWidth($columnWidth);
+	}
+	$sheet->getStyle('C6:C'.$lastRow)->getAlignment()->setWrapText(true);
+	$sheet->setAutoFilter('A5:'.$lastColumn.$lastRow);
+
+	$file = $dirOutput.'/'.$filename;
+	try {
+		$writer = new \PhpOffice\PhpSpreadsheet\Writer\Xlsx($spreadsheet);
+		$writer->save($file);
+	} catch (Throwable $e) {
+		$spreadsheet->disconnectWorksheets();
+		return array('ok' => false, 'error' => $e->getMessage());
+	}
+	$spreadsheet->disconnectWorksheets();
+	return array('ok' => true, 'fullpath' => $file, 'filename' => $filename);
+}
+

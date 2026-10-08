@@ -171,7 +171,36 @@ class ActionsInventairePlus extends CommonHookActions
 
 	public function doActions($parameters, &$object, &$action, $hookmanager)
 	{
-		global $langs, $user;
+		global $conf, $langs, $user;
+		$isStockList = ($this->hasHookContext($parameters, $hookmanager, 'stocklist') || $this->hasHookContext($parameters, $hookmanager, 'stocklistInventairePlus'));
+		if ($isStockList && $action === 'buildwarehousevaluationxlsxinventaireplus') {
+			$langs->loadLangs(array('stocks', 'inventaireplus@inventaireplus'));
+			if (!$user->hasRight('stock', 'creer')) {
+				setEventMessages($langs->trans('NotEnoughPermissions'), null, 'errors');
+				return -1;
+			}
+			$pdfFilename = basename(GETPOST('file', 'alphanohtml'));
+			if (!preg_match('/^etat_valorisation_stock_([0-9]+)_([0-9]{14})\.pdf$/', $pdfFilename, $matches)) {
+				setEventMessages($langs->trans('InventoryPlusWarehouseValuationExcelInvalidRequest'), null, 'errors');
+				return -1;
+			}
+			$dirOutput = $conf->stock->dir_output.'/temp/massgeneration/'.$user->id;
+			if (!is_readable($dirOutput.'/'.$pdfFilename)) {
+				setEventMessages($langs->trans('InventoryPlusWarehouseValuationExcelSourceMissing'), null, 'errors');
+				return -1;
+			}
+			require_once DOL_DOCUMENT_ROOT.'/custom/inventaireplus/lib/stockvaluation.lib.php';
+			$xlsxFilename = preg_replace('/\.pdf$/i', '.xlsx', $pdfFilename);
+			$result = inventaireplusWriteWarehouseValuationSpreadsheet($this->db, $conf, (int) $matches[1], $dirOutput, $xlsxFilename, $this->getOutputLangs());
+			if (empty($result['ok'])) {
+				$error = (!empty($result['error']) ? $result['error'] : 'InventoryPlusWarehouseValuationExcelFailed');
+				setEventMessages($langs->trans($error), null, 'errors');
+				return -1;
+			}
+			setEventMessages($langs->trans('InventoryPlusWarehouseValuationExcelGenerated'), null, 'mesgs');
+			$action = 'list';
+			return 0;
+		}
 		if (!$this->hasHookContext($parameters, $hookmanager, 'inventorycard')) return 0;
 		$langs->loadLangs(array('stocks', 'inventaireplus@inventaireplus'));
 		if (in_array($action, array('record', 'update'), true) && !empty($object->id)) {
