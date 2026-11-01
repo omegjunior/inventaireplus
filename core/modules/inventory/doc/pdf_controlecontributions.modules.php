@@ -134,9 +134,13 @@ class pdf_controlecontributions extends ModelePDFFactures
 		$y = $this->addPage($pdf, $dataset, $sequence, $outputlangs);
 		$lineNumber = 1;
 		$bottomLimit = $this->page_hauteur - $this->marge_basse - 13;
-		foreach ($dataset['zones'] as $zone) {
-			if ($y + 13 > $bottomLimit) $y = $this->addPage($pdf, $dataset, $sequence, $outputlangs);
+		$allAgents = array();
+		foreach ($dataset['zones'] as $zoneIndex => $zone) {
+			// Keep every physical zone on its own set of pages.
+			if ($zoneIndex > 0 || $y + 13 > $bottomLimit) $y = $this->addPage($pdf, $dataset, $sequence, $outputlangs);
 			$y = $this->renderZoneHeader($pdf, $y, $zone['label'], $outputlangs);
+			$zoneAgents = $this->extractAgents($zone['lines']);
+			foreach ($zoneAgents as $agent) $allAgents[$agent] = $agent;
 
 			foreach ($zone['lines'] as $line) {
 				$rowHeight = $this->rowHeight($pdf, $line, $outputlangs);
@@ -161,17 +165,23 @@ class pdf_controlecontributions extends ModelePDFFactures
 				$lineNumber++;
 			}
 
-			if ($y + 6 > $bottomLimit) $y = $this->addPage($pdf, $dataset, $sequence, $outputlangs);
+			$zoneEndHeight = ($blindCount ? 0 : 8) + 27;
+			if ($y + $zoneEndHeight > $bottomLimit) {
+				$y = $this->addPage($pdf, $dataset, $sequence, $outputlangs);
+				$y = $this->renderZoneHeader($pdf, $y, $zone['label'], $outputlangs);
+			}
 			if (!$blindCount) {
 				$pdf->SetFont('', 'B', 7);
 				$pdf->SetXY($this->marge_gauche, $y);
 				$pdf->MultiCell($this->tableWidth(), 6, $outputlangs->convToOutputCharset($outputlangs->transnoentities('Total').' '.$zone['label'].' : '.price($zone['total'])), 1, 'R', false, 0, '', '', true, 0, false, true, 6, 'M');
 				$y += 8;
 			}
+			$this->renderSignatures($pdf, $y + 3, $outputlangs, ($blindCount ? array() : $zoneAgents));
+			$y += 27;
 		}
 
-		if ($y + 27 > $bottomLimit) $y = $this->addPage($pdf, $dataset, $sequence, $outputlangs, false);
-		$this->renderSignatures($pdf, $y + 3, $outputlangs);
+		$y = $this->addPage($pdf, $dataset, $sequence, $outputlangs, false);
+		$this->renderSignatureSummary($pdf, $y, $outputlangs, ($blindCount ? array() : array_values($allAgents)));
 		$this->renderFooter($pdf, $outputlangs);
 		$pdf->Close();
 		$pdf->Output($file, 'F');
@@ -299,15 +309,49 @@ class pdf_controlecontributions extends ModelePDFFactures
 		return max(7, $maxLines * 3.5 + 1);
 	}
 
-	/** @return void */
-	protected function renderSignatures(&$pdf, $y, $outputlangs)
+	/**
+	 * @param array<int,array<string,mixed>> $lines Contribution lines
+	 * @return array<int,string>
+	 */
+	protected function extractAgents($lines)
+	{
+		$agents = array();
+		foreach ($lines as $line) {
+			$agent = trim($line['user_name'] !== '' ? $line['user_name'] : $line['user_login']);
+			if ($agent !== '') $agents[$agent] = $agent;
+		}
+		return array_values($agents);
+	}
+
+	/**
+	 * @param array<int,string> $agents Agent names
+	 * @param float $height Box height
+	 * @return void
+	 */
+	protected function renderSignatures(&$pdf, $y, $outputlangs, $agents = array(), $height = 22)
 	{
 		$half = ($this->tableWidth() - 6) / 2;
 		$pdf->SetFont('', 'B', 8);
+		$agentText = $outputlangs->transnoentities('InventoryPlusCollaborativeCountAgents').' :';
+		if (!empty($agents)) $agentText .= "\n".implode(', ', $agents);
 		$pdf->SetXY($this->marge_gauche, $y);
-		$pdf->MultiCell($half, 22, $outputlangs->convToOutputCharset($outputlangs->transnoentities('InventoryPlusCollaborativeCountAgents').' :'), 1, 'L');
+		$pdf->MultiCell($half, $height, $outputlangs->convToOutputCharset($agentText), 1, 'L');
 		$pdf->SetXY($this->marge_gauche + $half + 6, $y);
-		$pdf->MultiCell($half, 22, $outputlangs->convToOutputCharset($outputlangs->transnoentities('InventoryPlusCollaborativeController').' :'), 1, 'L');
+		$pdf->MultiCell($half, $height, $outputlangs->convToOutputCharset($outputlangs->transnoentities('InventoryPlusCollaborativeControllers').' :'), 1, 'L');
+	}
+
+	/**
+	 * @param array<int,string> $agents All counting agents
+	 * @return void
+	 */
+	protected function renderSignatureSummary(&$pdf, $y, $outputlangs, $agents)
+	{
+		$pdf->SetTextColor(0, 0, 60);
+		$pdf->SetFont('', 'B', 12);
+		$pdf->SetXY($this->marge_gauche, $y);
+		$pdf->MultiCell($this->tableWidth(), 8, $outputlangs->convToOutputCharset($outputlangs->transnoentities('InventoryPlusCollaborativeSignatureSummary')), 0, 'L');
+		$pdf->SetTextColor(0, 0, 0);
+		$this->renderSignatures($pdf, $y + 12, $outputlangs, $agents, 55);
 	}
 
 	/** @return void */

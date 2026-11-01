@@ -13,6 +13,9 @@
 - Add second-count verification and report storage tables with their database constraints.
 - Prevent long warehouse descriptions from overlapping dates in inventory minutes and discrepancy PDFs.
 - Recreate an open inventory in the correct warehouse and atomically migrate its collaborative contributions while retaining the abandoned source for audit.
+- Start each collaborative counting zone on a separate page in first-count and blind second-count control PDFs.
+- Add per-zone signature frames and a final agents/reviewers summary page to collaborative control PDFs.
+- Leave counting-agent frames blank on blind second-count sheets so the independent second counter can identify themselves.
 
 ## 1.2.0 - 2026-10-06
 
