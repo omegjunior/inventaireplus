@@ -16,6 +16,7 @@
 - Start each collaborative counting zone on a separate page in first-count and blind second-count control PDFs.
 - Add per-zone signature frames and a final agents/reviewers summary page to collaborative control PDFs.
 - Leave counting-agent frames blank on blind second-count sheets so the independent second counter can identify themselves.
+- Start each zone on a separate page in verified second-count result PDFs without adding signature frames.
 
 ## 1.2.0 - 2026-10-06
 

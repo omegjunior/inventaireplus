@@ -75,8 +75,9 @@ class pdf_comptageverifie extends pdf_controlecontributions
 		$y = $this->addPage($pdf, $dataset, $sequence, $outputlangs);
 		$lineNumber = 1;
 		$bottomLimit = $this->page_hauteur - $this->marge_basse - 13;
-		foreach ($dataset['zones'] as $zone) {
-			if ($y + 13 > $bottomLimit) $y = $this->addPage($pdf, $dataset, $sequence, $outputlangs);
+		foreach ($dataset['zones'] as $zoneIndex => $zone) {
+			// Keep every physical zone on its own set of pages.
+			if ($zoneIndex > 0 || $y + 13 > $bottomLimit) $y = $this->addPage($pdf, $dataset, $sequence, $outputlangs);
 			$y = $this->renderZoneHeader($pdf, $y, $zone['label'], $outputlangs);
 			foreach ($zone['lines'] as $line) {
 				$rowHeight = $this->rowHeight($pdf, $line, $outputlangs);
@@ -98,7 +99,10 @@ class pdf_comptageverifie extends pdf_controlecontributions
 				$y += $rowHeight;
 				$lineNumber++;
 			}
-			if ($y + 6 > $bottomLimit) $y = $this->addPage($pdf, $dataset, $sequence, $outputlangs);
+			if ($y + 6 > $bottomLimit) {
+				$y = $this->addPage($pdf, $dataset, $sequence, $outputlangs);
+				$y = $this->renderZoneHeader($pdf, $y, $zone['label'], $outputlangs);
+			}
 			$pdf->SetFont('', 'B', 7);
 			$pdf->SetXY($this->marge_gauche, $y);
 			$totals = $outputlangs->transnoentities('Total').' '.$zone['label'].' : '.price($zone['total_first']).' / '.price($zone['total_verified']);
